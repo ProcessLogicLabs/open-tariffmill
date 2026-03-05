@@ -1056,9 +1056,9 @@ class UnifiedSettingsDialog(QDialog):
 
         self.shared_templates_edit = QLineEdit()
         self.shared_templates_edit.setPlaceholderText("e.g., \\\\server\\tariffmill\\templates")
-        if self.parent_window and hasattr(self.parent_window, 'get_billing_setting'):
+        if self.parent_window and hasattr(self.parent_window, 'get_app_setting'):
             self.shared_templates_edit.setText(
-                self.parent_window.get_billing_setting('shared_templates_folder', '')
+                self.parent_window.get_app_setting('shared_templates_folder', '')
             )
         folder_row.addWidget(self.shared_templates_edit)
 
@@ -1143,8 +1143,8 @@ class UnifiedSettingsDialog(QDialog):
             else:
                 folder_path = folder_path.replace('\\', '/')
 
-        if self.parent_window and hasattr(self.parent_window, 'set_billing_setting'):
-            self.parent_window.set_billing_setting('shared_templates_folder', folder_path)
+        if self.parent_window and hasattr(self.parent_window, 'set_app_setting'):
+            self.parent_window.set_app_setting('shared_templates_folder', folder_path)
 
         if folder_path and not Path(folder_path).exists():
             QMessageBox.warning(self, "Path Not Found",
@@ -1162,11 +1162,11 @@ class UnifiedSettingsDialog(QDialog):
 
     def _sync_templates(self):
         """Sync templates between local and shared folders (two-way sync)."""
-        if not self.parent_window or not hasattr(self.parent_window, 'get_billing_setting'):
+        if not self.parent_window or not hasattr(self.parent_window, 'get_app_setting'):
             QMessageBox.warning(self, "Error", "Unable to access settings.")
             return
 
-        shared_folder = self.parent_window.get_billing_setting('shared_templates_folder', '')
+        shared_folder = self.parent_window.get_app_setting('shared_templates_folder', '')
         if not shared_folder:
             QMessageBox.warning(self, "No Shared Folder",
                 "No shared templates folder is configured.\n\nPlease configure a shared templates folder first.")
@@ -1912,9 +1912,9 @@ class UnifiedSettingsDialog(QDialog):
         domains_form = QFormLayout()
         self.domains_input = QLineEdit()
         self.domains_input.setPlaceholderText("e.g., MYCOMPANY, CORP, DOMAIN1")
-        if self.parent_window and hasattr(self.parent_window, 'get_billing_setting'):
+        if self.parent_window and hasattr(self.parent_window, 'get_app_setting'):
             self.domains_input.setText(
-                self.parent_window.get_billing_setting('allowed_domains', '')
+                self.parent_window.get_app_setting('allowed_domains', '')
             )
         domains_form.addRow("Allowed Domains:", self.domains_input)
 
@@ -1938,8 +1938,8 @@ class UnifiedSettingsDialog(QDialog):
     def _save_domain_settings(self):
         """Save domain authentication settings."""
         domains = self.domains_input.text().strip()
-        if self.parent_window and hasattr(self.parent_window, 'set_billing_setting'):
-            self.parent_window.set_billing_setting('allowed_domains', domains)
+        if self.parent_window and hasattr(self.parent_window, 'set_app_setting'):
+            self.parent_window.set_app_setting('allowed_domains', domains)
 
         if domains:
             domain_list = [d.strip() for d in domains.split(',') if d.strip()]

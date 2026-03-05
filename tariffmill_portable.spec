@@ -76,6 +76,8 @@ a = Analysis(
         'webbrowser',
         'socket',
         'getpass',
+        'settings_manager',
+        'settings_dialog',
         # AI providers (Anthropic only)
         'anthropic',
         'anthropic._client',
