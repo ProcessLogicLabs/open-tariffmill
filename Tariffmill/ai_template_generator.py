@@ -1,0 +1,2847 @@
+"""
+AI Template Generator for TariffMill
+
+Allows users to generate invoice templates using AI models (OpenAI, Anthropic, Google Gemini, Groq).
+The AI analyzes sample invoice text and generates a complete template class.
+"""
+
+import os
+import re
+import sys
+import json
+import logging
+import subprocess
+
+logger = logging.getLogger(__name__)
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+# Import SettingsManager for centralized settings
+try:
+    from Tariffmill.settings_manager import get_settings_manager
+except ImportError:
+    try:
+        from settings_manager import get_settings_manager
+    except ImportError:
+        get_settings_manager = None
+
+from PyQt5.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QGroupBox, QFormLayout, QLineEdit, QTextEdit, QPlainTextEdit,
+    QComboBox, QSpinBox, QCheckBox, QFileDialog, QMessageBox,
+    QTabWidget, QWidget, QProgressBar, QApplication, QSplitter,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView
+)
+from PyQt5.QtCore import Qt, pyqtSignal, QThread
+from PyQt5.QtGui import QFont
+
+
+def _install_package(package_name: str, parent=None) -> bool:
+    """
+    Install a Python package using pip.
+    Returns True if installation succeeded, False otherwise.
+    """
+    try:
+        # Use the same Python executable that's running this script
+        python_exe = sys.executable
+
+        # Show progress dialog
+        progress = QMessageBox(parent)
+        progress.setWindowTitle("Installing Package")
+        progress.setText(f"Installing {package_name}...")
+        progress.setStandardButtons(QMessageBox.NoButton)
+        progress.show()
+        QApplication.processEvents()
+
+        # Run pip install
+        result = subprocess.run(
+            [python_exe, "-m", "pip", "install", package_name],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+
+        progress.close()
+
+        if result.returncode == 0:
+            QMessageBox.information(
+                parent, "Installation Successful",
+                f"The {package_name} package has been installed successfully.\n\n"
+                "Please restart the application to use this feature."
+            )
+            return True
+        else:
+            QMessageBox.critical(
+                parent, "Installation Failed",
+                f"Failed to install {package_name}:\n\n{result.stderr}"
+            )
+            return False
+
+    except subprocess.TimeoutExpired:
+        QMessageBox.critical(
+            parent, "Installation Timeout",
+            f"Installation of {package_name} timed out.\n"
+            "Please try installing manually:\n  pip install " + package_name
+        )
+        return False
+    except Exception as e:
+        QMessageBox.critical(
+            parent, "Installation Error",
+            f"Error installing {package_name}:\n\n{str(e)}"
+        )
+        return False
+
+
+def _check_and_install_package(package_name: str, import_name: str = None, parent=None) -> bool:
+    """
+    Check if a package is installed, and offer to install if not.
+    Returns True if package is available (installed or just installed), False otherwise.
+    """
+    if import_name is None:
+        import_name = package_name
+
+    try:
+        __import__(import_name)
+        return True
+    except ImportError:
+        # Show dialog with install option
+        msg_box = QMessageBox(parent)
+        msg_box.setWindowTitle("Package Not Installed")
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setText(f"The {package_name} package is not installed.")
+        msg_box.setInformativeText("Would you like to install it now?")
+
+        install_btn = msg_box.addButton("Install Now", QMessageBox.AcceptRole)
+        msg_box.addButton("Cancel", QMessageBox.RejectRole)
+
+        msg_box.exec_()
+
+        if msg_box.clickedButton() == install_btn:
+            return _install_package(package_name, parent)
+
+        return False
+
+# Base directory for templates
+BASE_DIR = Path(__file__).parent
+
+# Try to import AI libraries
+try:
+    import openai
+    HAS_OPENAI = True
+except ImportError:
+    HAS_OPENAI = False
+
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
+try:
+    import google.generativeai as genai
+    HAS_GEMINI = True
+except ImportError:
+    HAS_GEMINI = False
+
+try:
+    from groq import Groq
+    HAS_GROQ = True
+except ImportError:
+    HAS_GROQ = False
+
+try:
+    import pdfplumber
+    HAS_PDFPLUMBER = True
+except ImportError:
+    HAS_PDFPLUMBER = False
+
+
+class AIGeneratorThread(QThread):
+    """Background thread for AI template generation."""
+    finished = pyqtSignal(str)  # Generated code
+    error = pyqtSignal(str)
+    progress = pyqtSignal(str)
+    stream_update = pyqtSignal(str)  # Streaming text updates (full text so far)
+    cancelled = pyqtSignal()  # Emitted when cancelled
+
+    def __init__(self, provider: str, model: str, api_key: str,
+                 invoice_text: str, template_name: str, supplier_name: str,
+                 country: str, client: str, base_url: str = ""):
+        super().__init__()
+        self.provider = provider
+        self.model = model
+        self.api_key = api_key
+        self.base_url = base_url
+        self.invoice_text = invoice_text
+        self.template_name = template_name
+        self.supplier_name = supplier_name
+        self.country = country
+        self.client = client
+        self._cancelled = False
+
+    def cancel(self):
+        """Request cancellation of the generation."""
+        self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        """Check if cancellation was requested."""
+        return self._cancelled
+
+    def run(self):
+        try:
+            if self._cancelled:
+                self.cancelled.emit()
+                return
+
+            self.progress.emit("Preparing prompt...")
+            prompt = self._build_prompt()
+
+            if self._cancelled:
+                self.cancelled.emit()
+                return
+
+            self.progress.emit(f"Calling {self.provider} API...")
+
+            if self.provider == "OpenAI":
+                result = self._call_openai(prompt)
+            elif self.provider == "Anthropic":
+                result = self._call_anthropic(prompt)
+            elif self.provider == "Google Gemini":
+                result = self._call_gemini(prompt)
+            elif self.provider == "Groq":
+                result = self._call_groq(prompt)
+            elif self.provider == "Ollama":
+                result = self._call_ollama(prompt)
+            else:
+                raise ValueError(f"Unknown provider: {self.provider}")
+
+            if self._cancelled:
+                self.cancelled.emit()
+                return
+
+            self.progress.emit("Processing response...")
+            code = self._extract_code(result)
+            self.finished.emit(code)
+
+        except Exception as e:
+            if not self._cancelled:
+                self.error.emit(str(e))
+            else:
+                self.cancelled.emit()
+
+    def _build_prompt(self) -> str:
+        """Build the prompt for AI template generation."""
+        # Truncate invoice text if too long
+        invoice_sample = self.invoice_text[:8000] if len(self.invoice_text) > 8000 else self.invoice_text
+
+        prompt = f'''You are an expert Python developer creating invoice parsing templates.
+Analyze this sample invoice text and generate a complete Python template class.
+
+SAMPLE INVOICE TEXT:
+```
+{invoice_sample}
+```
+
+REQUIREMENTS:
+1. Template Name: {self.template_name}
+2. Supplier Name: {self.supplier_name}
+3. Country of Origin: {self.country}
+4. Client: {self.client}
+
+Generate a Python class that:
+1. Inherits from BaseTemplate
+2. Has a can_process() method that identifies this supplier's invoices
+3. Has extract_invoice_number() to find the invoice number
+4. Has extract_project_number() to find PO/project numbers
+5. Has extract_line_items() to extract part numbers, quantities, and prices
+6. Uses regex patterns appropriate for this invoice format
+
+The class should follow this structure:
+
+```python
+"""
+{self.supplier_name} Template
+
+Auto-generated template for invoices from {self.supplier_name}.
+Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+"""
+
+import re
+from typing import List, Dict
+from .base_template import BaseTemplate
+
+
+class {self._to_class_name(self.template_name)}(BaseTemplate):
+    """Template for {self.supplier_name} invoices."""
+
+    name = "{self.supplier_name}"
+    description = "Invoices from {self.supplier_name}"
+    client = "{self.client}"
+    version = "1.0.0"
+    enabled = True
+
+    extra_columns = ['po_number', 'unit_price', 'description', 'country_origin']
+
+    # Keywords to identify this supplier
+    SUPPLIER_KEYWORDS = [
+        # Add lowercase keywords here
+    ]
+
+    def can_process(self, text: str) -> bool:
+        """Check if this is a {self.supplier_name} invoice."""
+        text_lower = text.lower()
+        for keyword in self.SUPPLIER_KEYWORDS:
+            if keyword in text_lower:
+                return True
+        return False
+
+    def get_confidence_score(self, text: str) -> float:
+        """Return confidence score for template matching."""
+        if not self.can_process(text):
+            return 0.0
+        return 0.8
+
+    def extract_invoice_number(self, text: str) -> str:
+        """Extract invoice number using regex patterns."""
+        patterns = [
+            # Add patterns based on the invoice format
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1).strip()
+        return "UNKNOWN"
+
+    def extract_project_number(self, text: str) -> str:
+        """Extract PO/project number."""
+        patterns = [
+            # Add patterns for PO numbers
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return "UNKNOWN"
+
+    def extract_manufacturer_name(self, text: str) -> str:
+        """Return the manufacturer name."""
+        return "{self.supplier_name.upper()}"
+
+    def extract_line_items(self, text: str) -> List[Dict]:
+        """Extract line items from invoice."""
+        items = []
+        # Add extraction logic based on the invoice format
+        # Look for patterns like: part_number quantity price
+
+        return items
+
+    def post_process_items(self, items: List[Dict]) -> List[Dict]:
+        """Post-process - deduplicate and validate."""
+        if not items:
+            return items
+
+        seen = set()
+        unique_items = []
+
+        for item in items:
+            key = f"{{item['part_number']}}_{{item['quantity']}}_{{item['total_price']}}"
+            if key not in seen:
+                seen.add(key)
+                # Add country of origin
+                item['country_origin'] = '{self.country}'
+                unique_items.append(item)
+
+        return unique_items
+
+    def is_packing_list(self, text: str) -> bool:
+        """Check if document is only a packing list."""
+        text_lower = text.lower()
+        if 'packing list' in text_lower and 'invoice' not in text_lower:
+            return True
+        return False
+```
+
+IMPORTANT:
+1. Analyze the invoice text carefully to identify the actual patterns used
+2. Create specific regex patterns for invoice numbers, PO numbers, and line items
+3. The SUPPLIER_KEYWORDS should contain unique identifiers from the invoice
+4. The extract_line_items() method should parse the actual table format from the invoice
+5. Return ONLY the Python code, no explanations
+
+Generate the complete, working Python template code:
+'''
+        return prompt
+
+    def _to_class_name(self, template_name: str) -> str:
+        """Convert template name to class name."""
+        return ''.join(word.title() for word in template_name.split('_')) + 'Template'
+
+    def _call_openai(self, prompt: str) -> str:
+        """Call OpenAI API."""
+        try:
+            import openai
+        except ImportError:
+            raise ImportError("openai package not installed. Run: pip install openai")
+
+        client = openai.OpenAI(api_key=self.api_key)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": "You are an expert Python developer specializing in invoice parsing and OCR templates."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=4000,
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+
+    def _call_anthropic(self, prompt: str) -> str:
+        """Call Anthropic API."""
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError("anthropic package not installed. Run: pip install anthropic")
+
+        client = anthropic.Anthropic(api_key=self.api_key)
+        response = client.messages.create(
+            model=self.model,
+            max_tokens=4000,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.content[0].text
+
+    def _call_gemini(self, prompt: str) -> str:
+        """Call Google Gemini API."""
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            raise ImportError("google-generativeai package not installed. Run: pip install google-generativeai")
+
+        genai.configure(api_key=self.api_key)
+        model = genai.GenerativeModel(self.model)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=4000,
+                temperature=0.3
+            )
+        )
+        return response.text
+
+    def _call_groq(self, prompt: str) -> str:
+        """Call Groq API."""
+        try:
+            from groq import Groq
+        except ImportError:
+            raise ImportError("groq package not installed. Run: pip install groq")
+
+        client = Groq(api_key=self.api_key)
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": "You are an expert Python developer specializing in invoice parsing and OCR templates."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=4000,
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+
+    def _call_ollama(self, prompt: str) -> str:
+        """Call Ollama API (OpenAI-compatible)."""
+        try:
+            import openai
+        except ImportError:
+            raise ImportError("openai package not installed. Run: pip install openai")
+
+        base_url = self.base_url or "http://localhost:11434"
+        client = openai.OpenAI(
+            base_url=f"{base_url.rstrip('/')}/v1",
+            api_key="ollama",
+            timeout=120.0
+        )
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": "You are an expert Python developer specializing in invoice parsing and OCR templates."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+
+    def _extract_code(self, response: str) -> str:
+        """Extract Python code from AI response."""
+        # Try to find code block
+        code_match = re.search(r'```python\s*(.*?)\s*```', response, re.DOTALL)
+        if code_match:
+            return code_match.group(1).strip()
+
+        # Try without language specifier
+        code_match = re.search(r'```\s*(.*?)\s*```', response, re.DOTALL)
+        if code_match:
+            return code_match.group(1).strip()
+
+        # Return the whole response if no code blocks found
+        # but try to clean it up
+        lines = response.split('\n')
+        code_lines = []
+        in_code = False
+
+        for line in lines:
+            if line.strip().startswith('"""') or line.strip().startswith('import ') or line.strip().startswith('from '):
+                in_code = True
+            if in_code:
+                code_lines.append(line)
+
+        if code_lines:
+            return '\n'.join(code_lines)
+
+        return response
+
+
+class AITemplateGeneratorDialog(QDialog):
+    """
+    Dialog for generating invoice templates using AI models.
+
+    Supports:
+    - OpenAI (GPT-4, GPT-3.5)
+    - Anthropic (Claude)
+    """
+
+    template_created = pyqtSignal(str, str)  # template_name, file_path
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.generator_thread = None
+        self.invoice_text = ""
+        self.templates_data = []  # Store template info
+
+        self.setWindowTitle("AI Template Generator")
+        self.setMinimumSize(1100, 750)
+        self.setup_ui()
+        self.load_settings()
+
+    def setup_ui(self):
+        """Build the dialog UI."""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        # Header
+        header = QLabel("AI Template Generator")
+        header.setFont(QFont("Arial", 16, QFont.Bold))
+        header.setStyleSheet("color: #2c3e50; margin-bottom: 10px;")
+        layout.addWidget(header)
+
+        desc = QLabel(
+            "Use AI to generate new OCR templates from sample invoices."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #7f8c8d; margin-bottom: 15px;")
+        layout.addWidget(desc)
+
+        # AI Provider Settings
+        provider_group = QGroupBox("AI Provider")
+        provider_layout = QFormLayout()
+
+        self.provider_combo = QComboBox()
+        # Available providers - status indicator will show if they're available
+        providers = ["OpenAI", "Anthropic", "Google Gemini", "Groq", "Ollama"]
+        self.provider_combo.addItems(providers)
+        self.provider_combo.currentTextChanged.connect(self.on_provider_changed)
+        provider_layout.addRow("Provider:", self.provider_combo)
+
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        provider_layout.addRow("Model:", self.model_combo)
+
+        self.api_key_edit = QLineEdit()
+        self.api_key_edit.setEchoMode(QLineEdit.Password)
+        self.api_key_edit.setPlaceholderText("Enter API key")
+        self.api_key_edit.textChanged.connect(self._update_status_indicator)
+        provider_layout.addRow("API Key:", self.api_key_edit)
+
+        # Status indicator row
+        status_row = QHBoxLayout()
+        self.status_indicator = QLabel("●")
+        self.status_indicator.setFixedWidth(20)
+        self.status_label = QLabel("Checking...")
+        self.check_status_btn = QPushButton("Check Status")
+        self.check_status_btn.setFixedWidth(100)
+        self.check_status_btn.clicked.connect(self._update_status_indicator)
+        status_row.addWidget(self.status_indicator)
+        status_row.addWidget(self.status_label)
+        status_row.addStretch()
+        status_row.addWidget(self.check_status_btn)
+        provider_layout.addRow("Status:", status_row)
+
+        provider_group.setLayout(provider_layout)
+        layout.addWidget(provider_group)
+
+        # Update models for initial provider
+        self.on_provider_changed(self.provider_combo.currentText())
+
+        # Initial status check
+        self._update_status_indicator()
+
+        # Invoice Input
+        input_group = QGroupBox("Sample Invoice")
+        input_layout = QVBoxLayout()
+
+        # File selection row
+        file_row = QHBoxLayout()
+        self.pdf_path_edit = QLineEdit()
+        self.pdf_path_edit.setPlaceholderText("Select a PDF invoice or paste text below...")
+        self.pdf_path_edit.setReadOnly(True)
+        file_row.addWidget(self.pdf_path_edit, stretch=1)
+
+        browse_btn = QPushButton("Browse PDF...")
+        browse_btn.clicked.connect(self.browse_pdf)
+        file_row.addWidget(browse_btn)
+
+        input_layout.addLayout(file_row)
+
+        self.invoice_text_edit = QPlainTextEdit()
+        self.invoice_text_edit.setPlaceholderText(
+            "Paste invoice text here, or load from PDF above.\n\n"
+            "The AI will analyze this text to create extraction patterns."
+        )
+        self.invoice_text_edit.setFont(QFont("Courier New", 9))
+        input_layout.addWidget(self.invoice_text_edit)
+
+        input_group.setLayout(input_layout)
+        layout.addWidget(input_group, stretch=1)
+
+        # Template Settings
+        settings_group = QGroupBox("Template Settings")
+        settings_layout = QFormLayout()
+
+        self.template_name_edit = QLineEdit()
+        self.template_name_edit.setPlaceholderText("e.g., acme_corp (lowercase with underscores)")
+        settings_layout.addRow("Template Name:", self.template_name_edit)
+
+        self.supplier_name_edit = QLineEdit()
+        self.supplier_name_edit.setPlaceholderText("e.g., Acme Corporation")
+        settings_layout.addRow("Supplier Name:", self.supplier_name_edit)
+
+        self.client_edit = QLineEdit()
+        self.client_edit.setPlaceholderText("e.g., Acme Corporation")
+        settings_layout.addRow("Client:", self.client_edit)
+
+        self.country_edit = QLineEdit()
+        self.country_edit.setPlaceholderText("e.g., CHINA, INDIA, USA")
+        settings_layout.addRow("Country of Origin:", self.country_edit)
+
+        settings_group.setLayout(settings_layout)
+        layout.addWidget(settings_group)
+
+        # Progress
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(True)
+        layout.addWidget(self.progress_bar)
+
+        # Generated Code Preview
+        preview_group = QGroupBox("Generated Template (Preview)")
+        preview_layout = QVBoxLayout()
+
+        self.code_preview = QPlainTextEdit()
+        self.code_preview.setReadOnly(True)
+        self.code_preview.setFont(QFont("Courier New", 9))
+        self.code_preview.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border: 1px solid #3c3c3c;
+                padding: 5px;
+            }
+        """)
+        self.code_preview.setPlaceholderText("Generated template code will appear here...")
+        preview_layout.addWidget(self.code_preview)
+
+        preview_group.setLayout(preview_layout)
+        layout.addWidget(preview_group, stretch=1)
+
+        # Action buttons
+        btn_layout = QHBoxLayout()
+
+        self.generate_btn = QPushButton("Generate Template")
+        self.generate_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #9b59b6;
+                color: white;
+                font-weight: bold;
+                padding: 10px 25px;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #8e44ad;
+            }
+        """)
+        self.generate_btn.clicked.connect(self.generate_template)
+        btn_layout.addWidget(self.generate_btn)
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #e74c3c;
+                color: white;
+                font-weight: bold;
+                padding: 10px 25px;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #c0392b;
+            }
+        """)
+        self.cancel_btn.clicked.connect(self.cancel_generation)
+        self.cancel_btn.setVisible(False)
+        btn_layout.addWidget(self.cancel_btn)
+
+        self.save_btn = QPushButton("Save Template")
+        self.save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #27ae60;
+                color: white;
+                font-weight: bold;
+                padding: 10px 25px;
+                border-radius: 4px;
+                font-size: 13px;
+            }
+            QPushButton:hover {
+                background-color: #2ecc71;
+            }
+        """)
+        self.save_btn.clicked.connect(self.save_template)
+        self.save_btn.setEnabled(False)
+        btn_layout.addWidget(self.save_btn)
+
+        btn_layout.addStretch()
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _get_saved_api_key(self, provider: str) -> str:
+        """Get saved API key using SettingsManager."""
+        # Try SettingsManager first
+        if get_settings_manager and get_settings_manager():
+            return get_settings_manager().get_ai_api_key(provider)
+        # Fallback to direct database access
+        try:
+            import sqlite3
+            from pathlib import Path
+            db_path = Path(__file__).parent / "tariffmill.db"
+            conn = sqlite3.connect(str(db_path))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{provider}',))
+            row = c.fetchone()
+            conn.close()
+            return row[0] if row else ""
+        except Exception:
+            return ""
+
+    def _save_api_key(self, provider: str, api_key: str):
+        """Save API key using SettingsManager."""
+        # Try SettingsManager first
+        if get_settings_manager and get_settings_manager():
+            get_settings_manager().set_ai_api_key(provider, api_key)
+            logger.info(f"Saved API key for {provider} via SettingsManager")
+            return
+        # Fallback to direct database access
+        try:
+            import sqlite3
+            from pathlib import Path
+            db_path = Path(__file__).parent / "tariffmill.db"
+            conn = sqlite3.connect(str(db_path))
+            c = conn.cursor()
+            # Ensure app_config table exists
+            c.execute("""CREATE TABLE IF NOT EXISTS app_config (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )""")
+            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+                     (f'api_key_{provider}', api_key))
+            conn.commit()
+            conn.close()
+            logger.info(f"Saved API key for {provider} to database")
+        except Exception as e:
+            logger.warning(f"Failed to save API key: {e}")
+
+    def _update_status_indicator(self, _=None):
+        """Update the status indicator based on current provider and settings."""
+        provider = self.provider_combo.currentText()
+
+        if provider == "OpenAI":
+            # Check if openai package is installed
+            try:
+                import openai
+            except ImportError:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - click Generate to install")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                if api_key.startswith("sk-"):
+                    self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Ready - API key configured")
+                    self.status_label.setStyleSheet("color: #27ae60;")
+                else:
+                    self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Warning - API key format looks incorrect")
+                    self.status_label.setStyleSheet("color: #f39c12;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not ready - Enter OpenAI API key")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
+        elif provider == "Anthropic":
+            # Check if anthropic package is installed
+            try:
+                import anthropic
+            except ImportError:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - click Generate to install")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                if api_key.startswith("sk-ant-"):
+                    self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Ready - API key configured")
+                    self.status_label.setStyleSheet("color: #27ae60;")
+                else:
+                    self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Warning - API key format looks incorrect")
+                    self.status_label.setStyleSheet("color: #f39c12;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not ready - Enter Anthropic API key")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
+        elif provider == "Google Gemini":
+            # Check if google-generativeai package is installed
+            try:
+                import google.generativeai
+            except ImportError:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - click Generate to install")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                if api_key.startswith("AI"):
+                    self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Ready - API key configured")
+                    self.status_label.setStyleSheet("color: #27ae60;")
+                else:
+                    self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Warning - API key format looks incorrect")
+                    self.status_label.setStyleSheet("color: #f39c12;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not ready - Enter Google AI API key")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
+        elif provider == "Groq":
+            # Check if groq package is installed
+            try:
+                from groq import Groq
+            except ImportError:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - click Generate to install")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            api_key = self.api_key_edit.text().strip()
+            if api_key:
+                if api_key.startswith("gsk_"):
+                    self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Ready - API key configured")
+                    self.status_label.setStyleSheet("color: #27ae60;")
+                else:
+                    self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                    self.status_label.setText("Warning - API key format looks incorrect")
+                    self.status_label.setStyleSheet("color: #f39c12;")
+            else:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Not ready - Enter Groq API key")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+
+        elif provider == "Ollama":
+            # Ollama is local — check if openai package is available (used for API calls)
+            try:
+                import openai
+            except ImportError:
+                self.status_indicator.setStyleSheet("color: #e74c3c; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Package not installed - click Generate to install")
+                self.status_label.setStyleSheet("color: #e74c3c;")
+                return
+
+            if self.model_combo.currentText():
+                self.status_indicator.setStyleSheet("color: #27ae60; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("Ready - Ollama (local server)")
+                self.status_label.setStyleSheet("color: #27ae60;")
+            else:
+                self.status_indicator.setStyleSheet("color: #f39c12; font-size: 16px; font-weight: bold;")
+                self.status_label.setText("No model selected - ensure Ollama is running")
+                self.status_label.setStyleSheet("color: #f39c12;")
+
+    def on_provider_changed(self, provider: str):
+        """Update model list when provider changes."""
+        self.model_combo.clear()
+
+        if provider == "OpenAI":
+            self.model_combo.addItems(["gpt-4.1", "gpt-4.1-mini", "o3-mini", "o4-mini", "gpt-4o"])
+            self.api_key_edit.setEnabled(True)
+            self.api_key_edit.setPlaceholderText("Enter OpenAI API key")
+            # Try to load from database first, then environment
+            saved_key = self._get_saved_api_key('openai')
+            if saved_key:
+                self.api_key_edit.setText(saved_key)
+            elif os.environ.get('OPENAI_API_KEY'):
+                self.api_key_edit.setText(os.environ['OPENAI_API_KEY'])
+        elif provider == "Anthropic":
+            self.model_combo.addItems(["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-sonnet-4-20250514"])
+            self.api_key_edit.setEnabled(True)
+            self.api_key_edit.setPlaceholderText("Enter Anthropic API key")
+            # Try to load from database first, then environment
+            saved_key = self._get_saved_api_key('anthropic')
+            if saved_key:
+                self.api_key_edit.setText(saved_key)
+            elif os.environ.get('ANTHROPIC_API_KEY'):
+                self.api_key_edit.setText(os.environ['ANTHROPIC_API_KEY'])
+        elif provider == "Google Gemini":
+            self.model_combo.addItems(["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.1-pro-preview"])
+            self.api_key_edit.setEnabled(True)
+            self.api_key_edit.setPlaceholderText("Enter Google AI API key")
+            # Try to load from database first, then environment
+            saved_key = self._get_saved_api_key('gemini')
+            if saved_key:
+                self.api_key_edit.setText(saved_key)
+            elif os.environ.get('GOOGLE_API_KEY'):
+                self.api_key_edit.setText(os.environ['GOOGLE_API_KEY'])
+        elif provider == "Groq":
+            self.model_combo.addItems(["llama-3.3-70b-versatile", "qwen/qwen3-32b", "openai/gpt-oss-120b", "llama-3.1-8b-instant"])
+            self.api_key_edit.setEnabled(True)
+            self.api_key_edit.setPlaceholderText("Enter Groq API key")
+            # Try to load from database first, then environment
+            saved_key = self._get_saved_api_key('groq')
+            if saved_key:
+                self.api_key_edit.setText(saved_key)
+            elif os.environ.get('GROQ_API_KEY'):
+                self.api_key_edit.setText(os.environ['GROQ_API_KEY'])
+        elif provider == "Ollama":
+            # Ollama is a local LLM server — no API key needed
+            self.api_key_edit.setEnabled(False)
+            self.api_key_edit.clear()
+            self.api_key_edit.setPlaceholderText("No API key required (local server)")
+            # Try to fetch models from running Ollama server
+            try:
+                from ollama_helper import fetch_ollama_models
+                base_url = "http://localhost:11434"
+                if get_settings_manager and get_settings_manager():
+                    base_url = get_settings_manager().ai.ollama_base_url or base_url
+                models = fetch_ollama_models(base_url)
+                if models:
+                    self.model_combo.addItems(models)
+            except Exception:
+                pass
+            # Fall back to saved model
+            saved_model = self._get_ai_setting_from_db('ollama_default_model')
+            if saved_model:
+                idx = self.model_combo.findText(saved_model)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+                elif self.model_combo.count() == 0:
+                    self.model_combo.addItem(saved_model)
+                    self.model_combo.setCurrentText(saved_model)
+
+        # Update status indicator after provider change
+        self._update_status_indicator()
+
+    def browse_pdf(self):
+        """Browse for PDF file and extract text."""
+        if not HAS_PDFPLUMBER:
+            QMessageBox.warning(
+                self, "Missing Dependency",
+                "pdfplumber is required to load PDFs.\n\n"
+                "Install with: pip install pdfplumber"
+            )
+            return
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Invoice PDF",
+            str(Path.home()),
+            "PDF Files (*.pdf);;All Files (*.*)"
+        )
+
+        if not path:
+            return
+
+        try:
+            self.pdf_path_edit.setText(path)
+
+            # Extract text from PDF
+            text_parts = []
+            with pdfplumber.open(path) as pdf:
+                for page in pdf.pages[:5]:  # First 5 pages
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_parts.append(page_text)
+
+            full_text = '\n\n'.join(text_parts)
+            self.invoice_text_edit.setPlainText(full_text)
+
+            # Try to auto-detect supplier name
+            self._auto_detect_supplier(full_text)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to extract PDF text:\n{e}")
+
+    def _auto_detect_supplier(self, text: str):
+        """Try to auto-detect supplier name from invoice text."""
+        # Look for common patterns
+        lines = text.split('\n')
+
+        # First few non-empty lines often contain company name
+        for line in lines[:10]:
+            line = line.strip()
+            if len(line) > 5 and len(line) < 60:
+                # Skip lines that look like addresses or dates
+                if re.match(r'^[\d\s\-/]+$', line):  # Just numbers
+                    continue
+                if re.search(r'\d{4}', line):  # Contains year
+                    continue
+                if '@' in line or 'www.' in line.lower():  # Email/web
+                    continue
+
+                # This might be a company name
+                if not self.supplier_name_edit.text():
+                    self.supplier_name_edit.setText(line)
+                    # Generate template name
+                    template_name = re.sub(r'[^a-z0-9]+', '_', line.lower()).strip('_')
+                    self.template_name_edit.setText(template_name[:30])
+                break
+
+    def generate_template(self):
+        """Start AI template generation."""
+        # Validate inputs
+        invoice_text = self.invoice_text_edit.toPlainText().strip()
+        if not invoice_text:
+            QMessageBox.warning(self, "Missing Input", "Please provide invoice text or load a PDF.")
+            return
+
+        template_name = self.template_name_edit.text().strip()
+        if not template_name:
+            QMessageBox.warning(self, "Missing Input", "Please enter a template name.")
+            return
+
+        if not re.match(r'^[a-z][a-z0-9_]*$', template_name):
+            QMessageBox.warning(
+                self, "Invalid Name",
+                "Template name must be lowercase, start with a letter, "
+                "and contain only letters, numbers, and underscores."
+            )
+            return
+
+        supplier_name = self.supplier_name_edit.text().strip()
+        if not supplier_name:
+            QMessageBox.warning(self, "Missing Input", "Please enter a supplier name.")
+            return
+
+        provider = self.provider_combo.currentText()
+        api_key = self.api_key_edit.text().strip()
+
+        # Check if required package is installed
+        if provider in ["OpenAI", "Ollama"]:
+            if not _check_and_install_package("openai", parent=self):
+                return
+
+        if provider == "Anthropic":
+            if not _check_and_install_package("anthropic", parent=self):
+                return
+
+        if provider != "Ollama" and provider in ["OpenAI", "Anthropic"] and not api_key:
+            QMessageBox.warning(self, "Missing API Key", f"Please enter your {provider} API key.")
+            return
+
+        # Save API key immediately when starting generation
+        if provider == "OpenAI" and api_key:
+            self._save_api_key('openai', api_key)
+        elif provider == "Anthropic" and api_key:
+            self._save_api_key('anthropic', api_key)
+
+        # Get Ollama base URL from settings
+        ollama_base_url = ""
+        if provider == "Ollama":
+            if get_settings_manager and get_settings_manager():
+                ollama_base_url = get_settings_manager().ai.ollama_base_url
+            ollama_base_url = ollama_base_url or "http://localhost:11434"
+
+        # Start generation
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setFormat("Generating...")
+        self.generate_btn.setVisible(False)
+        self.cancel_btn.setVisible(True)
+        self.save_btn.setEnabled(False)
+
+        self.generator_thread = AIGeneratorThread(
+            provider=provider,
+            model=self.model_combo.currentText(),
+            api_key=api_key,
+            invoice_text=invoice_text,
+            template_name=template_name,
+            supplier_name=supplier_name,
+            country=self.country_edit.text().strip() or "UNKNOWN",
+            client=self.client_edit.text().strip() or "Universal",
+            base_url=ollama_base_url
+        )
+        self.generator_thread.finished.connect(self.on_generation_complete)
+        self.generator_thread.error.connect(self.on_generation_error)
+        self.generator_thread.progress.connect(self.on_progress)
+        self.generator_thread.stream_update.connect(self.on_stream_update)
+        self.generator_thread.cancelled.connect(self.on_generation_cancelled)
+        self.generator_thread.start()
+
+    def on_progress(self, message: str):
+        """Update progress message."""
+        self.progress_bar.setFormat(message)
+
+    def on_stream_update(self, text: str):
+        """Update preview with streaming text."""
+        # Show raw streaming text in preview (will be processed on completion)
+        self.code_preview.setPlainText(text)
+        # Scroll to bottom to show latest content
+        scrollbar = self.code_preview.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def on_generation_complete(self, code: str):
+        """Handle successful generation."""
+        self.progress_bar.setVisible(False)
+        self.generate_btn.setVisible(True)
+        self.cancel_btn.setVisible(False)
+        self.save_btn.setEnabled(True)
+
+        self.code_preview.setPlainText(code)
+
+        # Save API key to database on successful generation
+        provider = self.provider_combo.currentText()
+        api_key = self.api_key_edit.text().strip()
+        if provider == "OpenAI" and api_key:
+            self._save_api_key('openai', api_key)
+        elif provider == "Anthropic" and api_key:
+            self._save_api_key('anthropic', api_key)
+
+        QMessageBox.information(
+            self, "Generation Complete",
+            "Template generated successfully!\n\n"
+            "Review the code in the preview, then click 'Save Template' to save it."
+        )
+
+    def on_generation_error(self, error: str):
+        """Handle generation error."""
+        self.progress_bar.setVisible(False)
+        self.generate_btn.setVisible(True)
+        self.cancel_btn.setVisible(False)
+
+        QMessageBox.critical(
+            self, "Generation Error",
+            f"Failed to generate template:\n\n{error}"
+        )
+
+    def cancel_generation(self):
+        """Cancel the ongoing generation."""
+        if self.generator_thread and self.generator_thread.isRunning():
+            self.progress_bar.setFormat("Cancelling...")
+            self.cancel_btn.setEnabled(False)
+            self.generator_thread.cancel()
+            # Force terminate after a short wait if still running
+            if not self.generator_thread.wait(2000):  # Wait 2 seconds
+                self.generator_thread.terminate()
+                self.generator_thread.wait()
+            self.on_generation_cancelled()
+
+    def on_generation_cancelled(self):
+        """Handle cancelled generation."""
+        self.progress_bar.setVisible(False)
+        self.generate_btn.setVisible(True)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.setEnabled(True)
+        self.progress_bar.setFormat("Cancelled")
+
+    def save_template(self):
+        """Save the generated template."""
+        code = self.code_preview.toPlainText().strip()
+        if not code:
+            QMessageBox.warning(self, "No Code", "No template code to save.")
+            return
+
+        template_name = self.template_name_edit.text().strip()
+
+        # Determine templates directory
+        templates_dir = Path(__file__).parent / 'templates'
+        if not templates_dir.exists():
+            templates_dir = Path(__file__).parent.parent / 'Tariffmill' / 'templates'
+
+        file_path = templates_dir / f"{template_name}.py"
+
+        # Check if file already exists
+        if file_path.exists():
+            reply = QMessageBox.question(
+                self, "File Exists",
+                f"Template '{template_name}' already exists.\n\nOverwrite?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        # Save the file
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+            # Save AI metadata alongside the template
+            import json
+            from datetime import datetime
+            metadata_path = file_path.with_suffix('.ai_meta.json')
+            metadata = {
+                'provider': self.provider_combo.currentText(),
+                'model': self.model_combo.currentText(),
+                'template_name': template_name,
+                'supplier_name': self.supplier_name_edit.text().strip(),
+                'country': self.country_edit.text().strip(),
+                'client': self.client_edit.text().strip(),
+                'invoice_text': self.invoice_text_edit.toPlainText().strip()[:5000],  # Limit size
+                'created_at': datetime.now().isoformat(),
+                'conversation_history': []  # For future chat modifications
+            }
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=2)
+
+            QMessageBox.information(
+                self, "Template Saved",
+                f"Template saved successfully!\n\n"
+                f"File: {file_path}\n\n"
+                f"The template will be available after refreshing templates."
+            )
+
+            # Emit signal
+            self.template_created.emit(template_name, str(file_path))
+
+            # Save settings
+            self.save_settings()
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save template:\n{e}")
+
+    def load_settings(self):
+        """Load saved settings (API keys, preferred provider) from database."""
+        # Load default provider from database
+        default_provider = self._get_ai_setting_from_db('default_provider')
+        if default_provider:
+            idx = self.provider_combo.findText(default_provider)
+            if idx >= 0:
+                self.provider_combo.setCurrentIndex(idx)
+
+        # Load default model for current provider
+        current_provider = self.provider_combo.currentText()
+        if current_provider == "OpenAI":
+            default_model = self._get_ai_setting_from_db('openai_default_model')
+            if default_model:
+                idx = self.model_combo.findText(default_model)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+                else:
+                    self.model_combo.setCurrentText(default_model)
+        elif current_provider == "Anthropic":
+            default_model = self._get_ai_setting_from_db('anthropic_default_model')
+            if default_model:
+                idx = self.model_combo.findText(default_model)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+                else:
+                    self.model_combo.setCurrentText(default_model)
+        elif current_provider == "Google Gemini":
+            default_model = self._get_ai_setting_from_db('gemini_default_model')
+            if default_model:
+                idx = self.model_combo.findText(default_model)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+                else:
+                    self.model_combo.setCurrentText(default_model)
+        elif current_provider == "Groq":
+            default_model = self._get_ai_setting_from_db('groq_default_model')
+            if default_model:
+                idx = self.model_combo.findText(default_model)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+                else:
+                    self.model_combo.setCurrentText(default_model)
+        elif current_provider == "Ollama":
+            default_model = self._get_ai_setting_from_db('ollama_default_model')
+            if default_model:
+                idx = self.model_combo.findText(default_model)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+                else:
+                    self.model_combo.setCurrentText(default_model)
+
+        # Load API key - database first, then environment (skip for Ollama)
+        if current_provider == "Ollama":
+            self.api_key_edit.setEnabled(False)
+            self.api_key_edit.clear()
+            self.api_key_edit.setPlaceholderText("No API key required (local server)")
+        else:
+            saved_key = self._get_saved_api_key(current_provider.lower().replace(" ", "").replace("google", ""))
+            if saved_key:
+                self.api_key_edit.setText(saved_key)
+            elif current_provider == "OpenAI" and os.environ.get('OPENAI_API_KEY'):
+                self.api_key_edit.setText(os.environ['OPENAI_API_KEY'])
+            elif current_provider == "Anthropic" and os.environ.get('ANTHROPIC_API_KEY'):
+                self.api_key_edit.setText(os.environ['ANTHROPIC_API_KEY'])
+            elif current_provider == "Google Gemini" and os.environ.get('GOOGLE_API_KEY'):
+                self.api_key_edit.setText(os.environ['GOOGLE_API_KEY'])
+            elif current_provider == "Groq" and os.environ.get('GROQ_API_KEY'):
+                self.api_key_edit.setText(os.environ['GROQ_API_KEY'])
+
+    def _get_ai_setting_from_db(self, key: str) -> str:
+        """Get AI setting using SettingsManager."""
+        # Try SettingsManager first
+        if get_settings_manager and get_settings_manager():
+            sm = get_settings_manager()
+            key_map = {
+                'default_provider': sm.ai.default_provider,
+                'openai_default_model': sm.ai.openai_model,
+                'anthropic_default_model': sm.ai.anthropic_model,
+                'gemini_default_model': sm.ai.gemini_model,
+                'groq_default_model': sm.ai.groq_model,
+                'ollama_default_model': sm.ai.ollama_model,
+                'ollama_base_url': sm.ai.ollama_base_url,
+            }
+            return key_map.get(key, "")
+        # Fallback to direct database access
+        try:
+            import sqlite3
+            db_path = BASE_DIR / "Resources" / "tariffmill.db"
+            conn = sqlite3.connect(str(db_path))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", (f'ai_{key}',))
+            row = c.fetchone()
+            conn.close()
+            return row[0] if row else ""
+        except Exception:
+            return ""
+
+    def save_settings(self):
+        """Save settings for next time."""
+        # Settings are now saved when generation completes or in Configuration dialog
+        pass
+
+
+
+class AITemplateChatThread(QThread):
+    """Background thread for AI chat modifications."""
+    finished = pyqtSignal(str)  # Modified code
+    error = pyqtSignal(str)
+    stream_update = pyqtSignal(str)
+
+    def __init__(self, provider: str, model: str, api_key: str,
+                 current_code: str, user_message: str, conversation_history: list,
+                 invoice_text: str = "", base_url: str = ""):
+        super().__init__()
+        self.provider = provider
+        self.model = model
+        self.api_key = api_key
+        self.base_url = base_url
+        self.current_code = current_code
+        self.user_message = user_message
+        self.conversation_history = conversation_history
+        self.invoice_text = invoice_text
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            # Build the system prompt
+            system_prompt = """You are an expert Python developer and AI assistant for TariffMill and OCRMill applications.
+
+## Application Context
+
+**TariffMill** is a customs brokerage application that:
+- Processes commercial invoices for US Customs import declarations
+- Maps invoice data to HTS (Harmonized Tariff Schedule) codes
+- Calculates duties, fees, and Section 232 steel/aluminum tariffs
+- Exports data in CBP-compliant formats (CSV, XML for ACE/e2Open)
+- Manages parts master database with HTS classifications
+- Supports MID (Manufacturer ID) tracking and validation
+
+**OCRMill** is the invoice OCR processing module that:
+- Extracts data from PDF invoices using AI-powered OCR
+- Uses customizable Python templates to parse different invoice formats
+- Maps extracted fields (part numbers, quantities, values, descriptions)
+- Supports legacy-to-current part number conversion via msi_sigma_parts table
+- Templates inherit from BaseTemplate class with extract() method
+
+## Database Tables Available
+- parts_master: HTS codes, descriptions, materials, country of origin
+- msi_sigma_parts: Legacy-to-current part number mappings with HTS data
+- mid_list: Manufacturer IDs with country codes
+- billing_records: Export tracking for billing purposes
+
+## Legacy-to-Current Part Number Mapping (IMPORTANT)
+
+The msi_sigma_parts table maps legacy supplier part numbers to current client part numbers.
+This is critical for invoice processing - extracted part numbers must be converted.
+
+**Database Schema:**
+```sql
+msi_sigma_parts (
+    msi_part_number TEXT PRIMARY KEY,  -- e.g., 'MS2001-F/O'
+    sigma_part_number TEXT NOT NULL,   -- e.g., 'MS2001-F-O'
+    material TEXT,                      -- e.g., 'cast iron'
+    hts_type TEXT,                      -- e.g., 'MH RINGS AND COVERS'
+    hts_code TEXT,                      -- e.g., '7325.10.0010'
+    steel_pct REAL DEFAULT 0.0
+)
+```
+
+**Conversion Patterns:**
+- '/' becomes '-': MS2001-F/O -> MS2001-F-O
+- '.' is removed from decimals: MS2001-X1.5 -> MS2001-X15
+- '/S' becomes '-S': MS2001-ST/S -> MS2001-ST-S
+
+**Required Template Implementation:**
+
+1. Add to __init__:
+```python
+def __init__(self):
+    super().__init__()
+    self.msi_sigma_mappings = {{}}
+    self._load_msi_sigma_mappings()
+```
+
+2. Database path helper:
+```python
+def _get_database_path(self) -> str:
+    import os
+    from pathlib import Path
+    # AppData location (installed app)
+    appdata_path = Path(os.environ.get('LOCALAPPDATA', '')) / 'TariffMill' / 'tariffmill.db'
+    if appdata_path.exists():
+        return str(appdata_path)
+    # Development location
+    dev_path = Path(__file__).parent.parent / 'Resources' / 'tariffmill.db'
+    if dev_path.exists():
+        return str(dev_path)
+    return ""
+```
+
+3. Load mappings from database:
+```python
+def _load_msi_sigma_mappings(self):
+    db_path = self._get_database_path()
+    if not db_path:
+        return
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute("SELECT msi_part_number, sigma_part_number FROM msi_sigma_parts")
+        for msi_part, sigma_part in cursor.fetchall():
+            if msi_part and sigma_part:
+                self.msi_sigma_mappings[msi_part.strip().upper()] = sigma_part.strip()
+        conn.close()
+    except Exception as e:
+        print(f"Error loading mappings: {{e}}")
+```
+
+4. Mapping function:
+```python
+def map_msi_to_sigma(self, msi_part: str) -> str:
+    if not msi_part:
+        return msi_part
+    msi_clean = msi_part.strip().upper()
+
+    # 1. Try exact database match
+    if msi_clean in self.msi_sigma_mappings:
+        return self.msi_sigma_mappings[msi_clean]
+
+    # 2. Try variations
+    for var in [msi_clean, msi_clean.replace('/', '-'), msi_clean.replace(' ', '')]:
+        if var in self.msi_sigma_mappings:
+            return self.msi_sigma_mappings[var]
+
+    # 3. Pattern-based fallback
+    import re
+    sigma_part = msi_clean.replace('/', '-')
+    sigma_part = re.sub(r'(\\d+)\\.(\\d+)', r'\\1\\2', sigma_part)
+    return sigma_part
+```
+
+5. Use in extract_line_items:
+```python
+# After extracting part_number from invoice
+sigma_part_number = self.map_msi_to_sigma(part_number)
+item = {{
+    'part_number': part_number,           # Original MSI format
+    'sigma_part_number': sigma_part_number,  # Converted Sigma format
+    ...
+}}
+```
+
+6. Add 'sigma_part_number' to extra_columns:
+```python
+extra_columns = ['sigma_part_number', 'description', 'country_origin', ...]
+```
+
+## Current Template Code
+```python
+{code}
+```
+
+{invoice_context}
+
+## Guidelines
+When helping with templates:
+1. Preserve the overall structure (class name, imports, base class)
+2. Only modify the specific parts the user asks about
+3. Return the COMPLETE modified template code
+4. Wrap the code in ```python ... ``` markers
+5. Explain what you changed after the code block
+6. ALWAYS implement part number mapping when the template processes legacy-format part numbers
+
+If the user asks a question, answer it and provide modified code if applicable."""
+
+            invoice_context = ""
+            if self.invoice_text:
+                invoice_context = f"\nSample invoice text for reference:\n```\n{self.invoice_text[:2000]}\n```"
+
+            system_msg = system_prompt.format(code=self.current_code, invoice_context=invoice_context)
+
+            if self.provider == "OpenAI":
+                result = self._call_openai(system_msg)
+            elif self.provider == "Anthropic":
+                result = self._call_anthropic(system_msg)
+            elif self.provider == "Google Gemini":
+                result = self._call_gemini(system_msg)
+            elif self.provider == "Groq":
+                result = self._call_groq(system_msg)
+            elif self.provider == "Ollama":
+                result = self._call_ollama(system_msg)
+            else:
+                raise ValueError(f"Unknown provider: {self.provider}")
+
+            if self._cancelled:
+                return
+
+            self.finished.emit(result)
+
+        except Exception as e:
+            if not self._cancelled:
+                self.error.emit(str(e))
+
+    def _call_openai(self, system_msg: str) -> str:
+        try:
+            import openai
+        except ImportError:
+            raise ImportError("openai package not installed")
+
+        client = openai.OpenAI(api_key=self.api_key)
+
+        messages = [{"role": "system", "content": system_msg}]
+        for msg in self.conversation_history:
+            messages.append(msg)
+        messages.append({"role": "user", "content": self.user_message})
+
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=4000,
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+
+    def _call_anthropic(self, system_msg: str) -> str:
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError("anthropic package not installed")
+
+        client = anthropic.Anthropic(api_key=self.api_key)
+
+        messages = []
+        for msg in self.conversation_history:
+            messages.append(msg)
+        messages.append({"role": "user", "content": self.user_message})
+
+        response = client.messages.create(
+            model=self.model,
+            max_tokens=4000,
+            system=system_msg,
+            messages=messages
+        )
+        return response.content[0].text
+
+    def _call_gemini(self, system_msg: str) -> str:
+        try:
+            import google.generativeai as genai
+        except ImportError:
+            raise ImportError("google-generativeai package not installed")
+
+        genai.configure(api_key=self.api_key)
+        model = genai.GenerativeModel(self.model)
+
+        # Build conversation for Gemini
+        full_prompt = f"{system_msg}\n\n"
+        for msg in self.conversation_history:
+            role = "User" if msg["role"] == "user" else "Assistant"
+            full_prompt += f"{role}: {msg['content']}\n\n"
+        full_prompt += f"User: {self.user_message}"
+
+        response = model.generate_content(
+            full_prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=4000,
+                temperature=0.3
+            )
+        )
+        return response.text
+
+    def _call_groq(self, system_msg: str) -> str:
+        try:
+            from groq import Groq
+        except ImportError:
+            raise ImportError("groq package not installed")
+
+        client = Groq(api_key=self.api_key)
+
+        messages = [{"role": "system", "content": system_msg}]
+        for msg in self.conversation_history:
+            messages.append(msg)
+        messages.append({"role": "user", "content": self.user_message})
+
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            max_tokens=4000,
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+
+    def _call_ollama(self, system_msg: str) -> str:
+        try:
+            import openai
+        except ImportError:
+            raise ImportError("openai package not installed")
+
+        base_url = self.base_url or "http://localhost:11434"
+        client = openai.OpenAI(
+            base_url=f"{base_url.rstrip('/')}/v1",
+            api_key="ollama",
+            timeout=120.0
+        )
+
+        messages = [{"role": "system", "content": system_msg}]
+        for msg in self.conversation_history:
+            messages.append(msg)
+        messages.append({"role": "user", "content": self.user_message})
+
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=0.3
+        )
+        return response.choices[0].message.content
+
+
+class AITemplateChatDialog(QDialog):
+    """Dialog for chatting with AI to modify templates."""
+    template_modified = pyqtSignal(str)  # Emitted when template is saved
+
+    def __init__(self, template_path: str, metadata: dict, parent=None):
+        super().__init__(parent)
+        self.template_path = Path(template_path)
+        self.metadata = metadata
+        self.conversation_history = metadata.get('conversation_history', [])
+        self.chat_thread = None
+
+        self.setWindowTitle(f"AI Template Editor - {self.template_path.stem}")
+        self.resize(1000, 700)
+        self.setup_ui()
+        self.load_template()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Header with provider info
+        header_layout = QHBoxLayout()
+        provider = self.metadata.get('provider', 'Unknown')
+        model = self.metadata.get('model', 'Unknown')
+        header_label = QLabel(f"<b>AI Provider:</b> {provider} | <b>Model:</b> {model}")
+        header_layout.addWidget(header_label)
+        header_layout.addStretch()
+
+        # Provider/Model selection for modifications
+        header_layout.addWidget(QLabel("Use:"))
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["Anthropic", "OpenAI", "Google Gemini", "Groq", "Ollama"])
+        # Set to original provider
+        idx = self.provider_combo.findText(provider)
+        if idx >= 0:
+            self.provider_combo.setCurrentIndex(idx)
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        header_layout.addWidget(self.provider_combo)
+
+        self.model_combo = QComboBox()
+        self._on_provider_changed(self.provider_combo.currentText())
+        # Set to original model if found
+        idx = self.model_combo.findText(model)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
+        header_layout.addWidget(self.model_combo)
+
+        layout.addLayout(header_layout)
+
+        # Main content: code on left, chat on right
+        content_layout = QHBoxLayout()
+
+        # Code editor (left side)
+        code_group = QGroupBox("Template Code")
+        code_layout = QVBoxLayout(code_group)
+        self.code_edit = QPlainTextEdit()
+        self.code_edit.setFont(QFont("Consolas", 10))
+        code_layout.addWidget(self.code_edit)
+        content_layout.addWidget(code_group, 3)
+
+        # Chat area (right side) - VS Code dark theme
+        chat_group = QGroupBox("Chat with AI")
+        chat_group.setStyleSheet("""
+            QGroupBox {
+                background-color: #252526;
+                border: 1px solid #3c3c3c;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding-top: 10px;
+                font-weight: bold;
+                color: #cccccc;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 0 8px;
+                color: #cccccc;
+            }
+        """)
+        chat_layout = QVBoxLayout(chat_group)
+
+        # Chat history display - VS Code style
+        self.chat_display = QTextEdit()
+        self.chat_display.setReadOnly(True)
+        self.chat_display.setFont(QFont("Segoe UI", 10))
+        self.chat_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #cccccc;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 8px;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e1e;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #5a5a5a;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #787878;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+        chat_layout.addWidget(self.chat_display, 1)
+
+        # Message input - VS Code style
+        self.message_input = QPlainTextEdit()
+        self.message_input.setMaximumHeight(100)
+        self.message_input.setPlaceholderText("Type your modification request here...\n(e.g., 'Change the invoice number regex to match format INV-XXXXX')")
+        self.message_input.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: "Segoe UI", sans-serif;
+                font-size: 10pt;
+            }
+            QPlainTextEdit:focus {
+                border: 1px solid #007acc;
+            }
+        """)
+        chat_layout.addWidget(self.message_input)
+
+        # Chat buttons - VS Code styled
+        chat_btn_layout = QHBoxLayout()
+
+        button_style = """
+            QPushButton {
+                background-color: #0e639c;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-weight: bold;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #1177bb;
+            }
+            QPushButton:pressed {
+                background-color: #0d5a8c;
+            }
+            QPushButton:disabled {
+                background-color: #3c3c3c;
+                color: #6e6e6e;
+            }
+        """
+        secondary_button_style = """
+            QPushButton {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+            }
+            QPushButton:pressed {
+                background-color: #333333;
+            }
+            QPushButton:disabled {
+                background-color: #2d2d2d;
+                color: #5a5a5a;
+            }
+        """
+
+        self.send_btn = QPushButton("Send")
+        self.send_btn.setStyleSheet(button_style)
+        self.send_btn.clicked.connect(self.send_message)
+        chat_btn_layout.addWidget(self.send_btn)
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setStyleSheet(secondary_button_style)
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self.cancel_request)
+        chat_btn_layout.addWidget(self.cancel_btn)
+
+        chat_btn_layout.addStretch()
+
+        self.apply_btn = QPushButton("Apply Changes")
+        self.apply_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #388a34;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-weight: bold;
+                font-size: 10pt;
+            }
+            QPushButton:hover {
+                background-color: #45a340;
+            }
+            QPushButton:pressed {
+                background-color: #2d722a;
+            }
+            QPushButton:disabled {
+                background-color: #2d2d2d;
+                color: #5a5a5a;
+            }
+        """)
+        self.apply_btn.setEnabled(False)
+        self.apply_btn.clicked.connect(self.apply_changes)
+        chat_btn_layout.addWidget(self.apply_btn)
+
+        chat_layout.addLayout(chat_btn_layout)
+        content_layout.addWidget(chat_group, 2)
+
+        layout.addLayout(content_layout)
+
+        # Bottom buttons
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+
+        save_btn = QPushButton("Save Template")
+        save_btn.clicked.connect(self.save_template)
+        btn_layout.addWidget(save_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+        # Load any existing chat history
+        self._display_chat_history()
+
+    def _on_provider_changed(self, provider: str):
+        """Update model list when provider changes."""
+        self.model_combo.clear()
+        if provider == "OpenAI":
+            self.model_combo.addItems(["gpt-4.1", "gpt-4.1-mini", "o3-mini", "o4-mini", "gpt-4o"])
+        elif provider == "Anthropic":
+            self.model_combo.addItems(["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-sonnet-4-20250514"])
+        elif provider == "Google Gemini":
+            self.model_combo.addItems(["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.1-pro-preview"])
+        elif provider == "Groq":
+            self.model_combo.addItems(["llama-3.3-70b-versatile", "qwen/qwen3-32b", "openai/gpt-oss-120b", "llama-3.1-8b-instant"])
+        elif provider == "Ollama":
+            try:
+                from ollama_helper import fetch_ollama_models
+                base_url = "http://localhost:11434"
+                if get_settings_manager and get_settings_manager():
+                    base_url = get_settings_manager().ai.ollama_base_url or base_url
+                models = fetch_ollama_models(base_url)
+                if models:
+                    self.model_combo.addItems(models)
+            except Exception:
+                pass
+            saved_model = ""
+            if get_settings_manager and get_settings_manager():
+                saved_model = get_settings_manager().ai.ollama_model
+            if saved_model and self.model_combo.count() == 0:
+                self.model_combo.addItem(saved_model)
+
+    def _get_api_key(self, provider: str) -> str:
+        """Get API key for the provider using SettingsManager."""
+        if provider == "Ollama":
+            return "ollama"  # Ollama doesn't use API keys
+        key_name = {'OpenAI': 'openai', 'Anthropic': 'anthropic', 'Google Gemini': 'gemini', 'Groq': 'groq'}.get(provider, 'openai')
+
+        # Try SettingsManager first
+        if get_settings_manager and get_settings_manager():
+            key = get_settings_manager().get_ai_api_key(key_name)
+            if key:
+                return key
+
+        # Fallback to database
+        try:
+            import sqlite3
+            db_path = Path(__file__).parent / "tariffmill.db"
+            conn = sqlite3.connect(str(db_path))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
+            row = c.fetchone()
+            conn.close()
+            if row and row[0]:
+                return row[0]
+        except:
+            pass
+
+        # Fall back to environment
+        if provider == "OpenAI":
+            return os.environ.get('OPENAI_API_KEY', '')
+        elif provider == "Anthropic":
+            return os.environ.get('ANTHROPIC_API_KEY', '')
+        elif provider == "Google Gemini":
+            return os.environ.get('GOOGLE_API_KEY', '')
+        elif provider == "Groq":
+            return os.environ.get('GROQ_API_KEY', '')
+        return ""
+
+    def load_template(self):
+        """Load the template code."""
+        try:
+            with open(self.template_path, 'r', encoding='utf-8') as f:
+                self.code_edit.setPlainText(f.read())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load template: {e}")
+
+    def _format_message_html(self, role: str, content: str) -> str:
+        """Format a chat message as VS Code-style HTML."""
+        # Escape HTML in content but preserve code blocks
+        import html as html_module
+
+        # Process code blocks first
+        def replace_code_block(match):
+            code = html_module.escape(match.group(1))
+            return f'</p><pre style="background-color: #0d0d0d; color: #d4d4d4; padding: 12px; border-radius: 6px; font-family: Consolas, monospace; font-size: 11px; margin: 8px 0; border-left: 3px solid #007acc; overflow-x: auto;">{code}</pre><p style="margin: 0; line-height: 1.6;">'
+
+        # Replace ```python...``` blocks
+        formatted = re.sub(r'```(?:python)?\s*(.*?)\s*```', replace_code_block, content, flags=re.DOTALL)
+
+        # Escape remaining HTML (but not our inserted HTML)
+        parts = re.split(r'(<pre.*?</pre>)', formatted, flags=re.DOTALL)
+        escaped_parts = []
+        for part in parts:
+            if part.startswith('<pre'):
+                escaped_parts.append(part)
+            else:
+                escaped_parts.append(html_module.escape(part))
+        formatted = ''.join(escaped_parts)
+
+        # Replace inline code `code`
+        formatted = re.sub(r'`([^`]+)`', r'<code style="background-color: #3c3c3c; color: #ce9178; padding: 2px 6px; border-radius: 3px; font-family: Consolas, monospace; font-size: 11px;">\1</code>', formatted)
+
+        # Replace newlines with <br> (but not in code blocks)
+        parts = re.split(r'(<pre.*?</pre>)', formatted, flags=re.DOTALL)
+        for i, part in enumerate(parts):
+            if not part.startswith('<pre'):
+                parts[i] = part.replace('\n', '<br>')
+        formatted = ''.join(parts)
+
+        if role == 'user':
+            # User message - right-aligned blue bubble
+            return f'''
+            <div style="margin: 12px 0; text-align: right;">
+                <div style="display: inline-block; max-width: 85%; text-align: left;">
+                    <div style="color: #808080; font-size: 9px; margin-bottom: 4px;">You</div>
+                    <div style="background-color: #264f78; color: #ffffff; padding: 10px 14px; border-radius: 12px 12px 4px 12px;">
+                        <p style="margin: 0; line-height: 1.6;">{formatted}</p>
+                    </div>
+                </div>
+            </div>
+            '''
+        else:
+            # AI message - left-aligned gray bubble
+            return f'''
+            <div style="margin: 12px 0; text-align: left;">
+                <div style="display: inline-block; max-width: 85%; text-align: left;">
+                    <div style="color: #808080; font-size: 9px; margin-bottom: 4px;">AI Assistant</div>
+                    <div style="background-color: #2d2d2d; color: #e0e0e0; padding: 10px 14px; border-radius: 12px 12px 12px 4px; border: 1px solid #404040;">
+                        <p style="margin: 0; line-height: 1.6;">{formatted}</p>
+                    </div>
+                </div>
+            </div>
+            '''
+
+    def _display_chat_history(self):
+        """Display existing chat history."""
+        self.chat_display.clear()
+        html_content = '<div style="font-family: Segoe UI, sans-serif;">'
+        for msg in self.conversation_history:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            html_content += self._format_message_html(role, content)
+        html_content += '</div>'
+        self.chat_display.setHtml(html_content)
+
+    def send_message(self):
+        """Send a message to the AI."""
+        message = self.message_input.toPlainText().strip()
+        if not message:
+            return
+
+        provider = self.provider_combo.currentText()
+        api_key = self._get_api_key(provider)
+
+        if provider != "Ollama" and provider in ["OpenAI", "Anthropic"] and not api_key:
+            QMessageBox.warning(self, "Missing API Key",
+                              f"No API key found for {provider}.\n\n"
+                              "Please configure it in Configuration > Billing tab or set environment variable.")
+            return
+
+        # Get Ollama base URL from settings
+        ollama_base_url = ""
+        if provider == "Ollama":
+            if get_settings_manager and get_settings_manager():
+                ollama_base_url = get_settings_manager().ai.ollama_base_url
+            ollama_base_url = ollama_base_url or "http://localhost:11434"
+
+        # Add user message to display and history
+        self.conversation_history.append({"role": "user", "content": message})
+        self._display_chat_history()
+        self.message_input.clear()
+        # Scroll to bottom
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+        # Disable send, enable cancel
+        self.send_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+
+        # Start AI request
+        self.chat_thread = AITemplateChatThread(
+            provider=provider,
+            model=self.model_combo.currentText(),
+            api_key=api_key,
+            current_code=self.code_edit.toPlainText(),
+            user_message=message,
+            conversation_history=self.conversation_history,
+            invoice_text=self.metadata.get('invoice_text', ''),
+            base_url=ollama_base_url
+        )
+        self.chat_thread.finished.connect(self._on_response)
+        self.chat_thread.error.connect(self._on_error)
+        self.chat_thread.start()
+
+    def cancel_request(self):
+        """Cancel the current AI request."""
+        if self.chat_thread:
+            self.chat_thread.cancel()
+            self.chat_thread = None
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+    def _on_response(self, response: str):
+        """Handle AI response."""
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+        # Extract code if present
+        code_match = re.search(r'```python\s*(.*?)\s*```', response, re.DOTALL)
+        if code_match:
+            # Auto-apply code changes to editor
+            self.code_edit.setPlainText(code_match.group(1))
+            self.pending_code = None
+            self.apply_btn.setEnabled(False)
+
+            # Store response without the code block for chat display
+            response_without_code = re.sub(r'```python\s*.*?\s*```', '[Code applied to editor]', response, flags=re.DOTALL)
+            self.conversation_history.append({"role": "assistant", "content": response_without_code})
+            self._display_chat_history()
+            self._append_system_message("Code changes automatically applied to the editor.")
+        else:
+            self.pending_code = None
+            # Add to history and redisplay
+            self.conversation_history.append({"role": "assistant", "content": response})
+            self._display_chat_history()
+
+        # Scroll to bottom
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _append_system_message(self, message: str, is_error: bool = False):
+        """Append a system notification message to the chat display."""
+        color = "#f48771" if is_error else "#4ec9b0"  # Red for error, teal for info
+        icon = "⚠️" if is_error else "ℹ️"
+        html = f'''
+        <div style="margin: 8px 0; text-align: center;">
+            <div style="display: inline-block; background-color: #252526; color: {color}; padding: 8px 16px; border-radius: 6px; font-size: 10px; border: 1px solid #404040;">
+                {icon} {message}
+            </div>
+        </div>
+        '''
+        # Get current HTML and append
+        current_html = self.chat_display.toHtml()
+        # Find closing div and insert before it
+        if '</div></body>' in current_html:
+            current_html = current_html.replace('</div></body>', f'{html}</div></body>')
+        else:
+            self.chat_display.append(html)
+            return
+        self.chat_display.setHtml(current_html)
+        # Scroll to bottom
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _on_error(self, error: str):
+        """Handle AI error."""
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self._append_system_message(f"Error: {error}", is_error=True)
+
+    def apply_changes(self):
+        """Apply the AI-suggested code changes."""
+        if hasattr(self, 'pending_code') and self.pending_code:
+            self.code_edit.setPlainText(self.pending_code)
+            self.apply_btn.setEnabled(False)
+            self._append_system_message("Changes applied to code editor.")
+
+    def save_template(self):
+        """Save the modified template."""
+        code = self.code_edit.toPlainText()
+
+        try:
+            # Save template code
+            with open(self.template_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+            # Update metadata with conversation history
+            self.metadata['conversation_history'] = self.conversation_history
+            self.metadata['last_modified'] = datetime.now().isoformat()
+
+            metadata_path = self.template_path.with_suffix('.ai_meta.json')
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(self.metadata, f, indent=2)
+
+            QMessageBox.information(self, "Saved", "Template saved successfully!")
+            self.template_modified.emit(str(self.template_path))
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save template: {e}")
+
+
+class AITemplateEditorDialog(QDialog):
+    """
+    Unified AI Template Editor for editing both AI-generated and regular templates.
+    Features a code editor on the left and AI chat assistant on the right.
+    """
+    template_modified = pyqtSignal(str)  # Emitted when template is saved
+
+    def __init__(self, template_path: str, metadata: dict, parent=None):
+        super().__init__(parent)
+        self.template_path = Path(template_path)
+        self.metadata = metadata
+        self.conversation_history = metadata.get('conversation_history', [])
+        self.chat_thread = None
+        self.is_ai_template = bool(metadata.get('provider'))
+
+        self.setWindowTitle(f"Template Editor - {self.template_path.stem}")
+        self.setMinimumSize(1200, 800)
+        self.resize(1400, 900)
+        self.setup_ui()
+        self.load_template()
+
+        # Show welcome message for templates without conversation history
+        if not self.conversation_history:
+            self._show_welcome_message()
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+
+        # Header bar with template info and AI provider selection
+        header_widget = QWidget()
+        header_widget.setStyleSheet("background-color: #2d2d30; border-radius: 6px; padding: 5px;")
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(10, 8, 10, 8)
+
+        # Template name
+        name_label = QLabel(f"<b style='color: #dcdcdc; font-size: 14px;'>{self.template_path.stem}</b>")
+        header_layout.addWidget(name_label)
+
+        # AI indicator
+        if self.is_ai_template:
+            provider = self.metadata.get('provider', '')
+            ai_badge = QLabel(f"AI Generated ({provider})")
+            ai_badge.setStyleSheet("color: #4ec9b0; font-size: 11px; padding: 2px 8px; background-color: #1e3a1e; border-radius: 4px;")
+            header_layout.addWidget(ai_badge)
+
+        header_layout.addStretch()
+
+        # AI Provider selection
+        header_layout.addWidget(QLabel("<span style='color: #9cdcfe;'>AI Provider:</span>"))
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItems(["Anthropic", "OpenAI", "Google Gemini", "Groq", "Ollama"])
+        self.provider_combo.setFixedWidth(140)
+        if self.is_ai_template:
+            idx = self.provider_combo.findText(self.metadata.get('provider', ''))
+            if idx >= 0:
+                self.provider_combo.setCurrentIndex(idx)
+        self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
+        header_layout.addWidget(self.provider_combo)
+
+        self.model_combo = QComboBox()
+        self.model_combo.setFixedWidth(200)
+        self._on_provider_changed(self.provider_combo.currentText())
+        if self.is_ai_template:
+            idx = self.model_combo.findText(self.metadata.get('model', ''))
+            if idx >= 0:
+                self.model_combo.setCurrentIndex(idx)
+        header_layout.addWidget(self.model_combo)
+
+        layout.addWidget(header_widget)
+
+        # Main splitter - code editor on left, chat on right
+        main_splitter = QSplitter(Qt.Horizontal)
+
+        # === LEFT SIDE: Code Editor ===
+        code_widget = QWidget()
+        code_layout = QVBoxLayout(code_widget)
+        code_layout.setContentsMargins(0, 0, 0, 0)
+        code_layout.setSpacing(5)
+
+        # Code editor header
+        code_header = QHBoxLayout()
+        code_label = QLabel("<b style='color: #dcdcdc;'>Template Code</b>")
+        code_header.addWidget(code_label)
+        code_header.addStretch()
+
+        # Syntax validation indicator
+        self.syntax_indicator = QLabel("✓ Valid")
+        self.syntax_indicator.setStyleSheet("color: #4ec9b0; font-size: 10px;")
+        code_header.addWidget(self.syntax_indicator)
+        code_layout.addLayout(code_header)
+
+        # Code editor with dark theme
+        self.code_edit = QPlainTextEdit()
+        self.code_edit.setFont(QFont("Consolas", 11))
+        self.code_edit.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 8px;
+                selection-background-color: #264f78;
+            }
+        """)
+        self.code_edit.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.code_edit.textChanged.connect(self._validate_syntax)
+        code_layout.addWidget(self.code_edit, 1)
+
+        main_splitter.addWidget(code_widget)
+
+        # === RIGHT SIDE: AI Chat Panel ===
+        chat_widget = QWidget()
+        chat_widget.setStyleSheet("background-color: #252526; border-radius: 6px;")
+        chat_layout = QVBoxLayout(chat_widget)
+        chat_layout.setContentsMargins(10, 10, 10, 10)
+        chat_layout.setSpacing(8)
+
+        # Chat header
+        chat_label = QLabel("<b style='color: #dcdcdc;'>AI Assistant</b>")
+        chat_layout.addWidget(chat_label)
+
+        # Chat display
+        self.chat_display = QTextEdit()
+        self.chat_display.setReadOnly(True)
+        self.chat_display.setFont(QFont("Segoe UI", 10))
+        self.chat_display.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                color: #cccccc;
+                border: 1px solid #3c3c3c;
+                border-radius: 4px;
+                padding: 8px;
+            }
+            QScrollBar:vertical {
+                background-color: #1e1e1e;
+                width: 10px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #5a5a5a;
+                border-radius: 5px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #787878;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+        chat_layout.addWidget(self.chat_display, 1)
+
+        # Message input
+        self.message_input = QPlainTextEdit()
+        self.message_input.setMaximumHeight(80)
+        self.message_input.setPlaceholderText("Ask the AI to modify the template...\n(e.g., 'Add support for a new date format' or 'Fix the regex for invoice numbers')")
+        self.message_input.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: "Segoe UI", sans-serif;
+                font-size: 10pt;
+            }
+            QPlainTextEdit:focus {
+                border: 1px solid #007acc;
+            }
+        """)
+        chat_layout.addWidget(self.message_input)
+
+        # Chat buttons
+        chat_btn_layout = QHBoxLayout()
+        chat_btn_layout.setSpacing(8)
+
+        self.send_btn = QPushButton("Send")
+        self.send_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0e639c;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #1177bb; }
+            QPushButton:pressed { background-color: #0d5a8c; }
+            QPushButton:disabled { background-color: #3c3c3c; color: #6e6e6e; }
+        """)
+        self.send_btn.clicked.connect(self.send_message)
+        chat_btn_layout.addWidget(self.send_btn)
+
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 8px 16px;
+            }
+            QPushButton:hover { background-color: #4a4a4a; }
+            QPushButton:disabled { background-color: #2d2d2d; color: #5a5a5a; }
+        """)
+        self.cancel_btn.setEnabled(False)
+        self.cancel_btn.clicked.connect(self.cancel_request)
+        chat_btn_layout.addWidget(self.cancel_btn)
+
+        chat_btn_layout.addStretch()
+
+        self.apply_btn = QPushButton("Apply Changes")
+        self.apply_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #388a34;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #45a340; }
+            QPushButton:disabled { background-color: #2d2d2d; color: #5a5a5a; }
+        """)
+        self.apply_btn.setEnabled(False)
+        self.apply_btn.clicked.connect(self.apply_changes)
+        chat_btn_layout.addWidget(self.apply_btn)
+
+        chat_layout.addLayout(chat_btn_layout)
+
+        main_splitter.addWidget(chat_widget)
+
+        # Set splitter proportions (60% code, 40% chat)
+        main_splitter.setSizes([700, 500])
+        layout.addWidget(main_splitter, 1)
+
+        # Bottom button bar
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+
+        # Left side buttons
+        self.test_btn = QPushButton("Test Template")
+        self.test_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #6c5ce7;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 20px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #7d6ee8; }
+        """)
+        self.test_btn.clicked.connect(self._test_template)
+        btn_layout.addWidget(self.test_btn)
+
+        btn_layout.addStretch()
+
+        # Right side buttons
+        save_btn = QPushButton("Save Template")
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #388a34;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 10px 24px;
+                font-weight: bold;
+                font-size: 11pt;
+            }
+            QPushButton:hover { background-color: #45a340; }
+        """)
+        save_btn.clicked.connect(self.save_template)
+        btn_layout.addWidget(save_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3c3c3c;
+                color: #cccccc;
+                border: 1px solid #5a5a5a;
+                border-radius: 4px;
+                padding: 10px 24px;
+            }
+            QPushButton:hover { background-color: #4a4a4a; }
+        """)
+        close_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(close_btn)
+
+        layout.addLayout(btn_layout)
+
+    def _on_provider_changed(self, provider: str):
+        """Update model list when provider changes."""
+        self.model_combo.clear()
+        if provider == "OpenAI":
+            self.model_combo.addItems(["gpt-4.1", "gpt-4.1-mini", "o3-mini", "o4-mini", "gpt-4o"])
+        elif provider == "Anthropic":
+            self.model_combo.addItems(["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-sonnet-4-20250514"])
+        elif provider == "Google Gemini":
+            self.model_combo.addItems(["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-3.1-pro-preview"])
+        elif provider == "Groq":
+            self.model_combo.addItems(["llama-3.3-70b-versatile", "qwen/qwen3-32b", "openai/gpt-oss-120b", "llama-3.1-8b-instant"])
+        elif provider == "Ollama":
+            try:
+                from ollama_helper import fetch_ollama_models
+                base_url = "http://localhost:11434"
+                if get_settings_manager and get_settings_manager():
+                    base_url = get_settings_manager().ai.ollama_base_url or base_url
+                models = fetch_ollama_models(base_url)
+                if models:
+                    self.model_combo.addItems(models)
+            except Exception:
+                pass
+            saved_model = ""
+            if get_settings_manager and get_settings_manager():
+                saved_model = get_settings_manager().ai.ollama_model
+            if saved_model and self.model_combo.count() == 0:
+                self.model_combo.addItem(saved_model)
+
+    def _get_api_key(self, provider: str) -> str:
+        """Get API key for the provider using SettingsManager."""
+        if provider == "Ollama":
+            return "ollama"  # Ollama doesn't use API keys
+        key_name = {'OpenAI': 'openai', 'Anthropic': 'anthropic', 'Google Gemini': 'gemini', 'Groq': 'groq'}.get(provider, 'openai')
+
+        # Try SettingsManager first
+        if get_settings_manager and get_settings_manager():
+            key = get_settings_manager().get_ai_api_key(key_name)
+            if key:
+                return key
+
+        # Fallback to database
+        try:
+            import sqlite3
+            db_path = Path(__file__).parent / "tariffmill.db"
+            conn = sqlite3.connect(str(db_path))
+            c = conn.cursor()
+            c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
+            row = c.fetchone()
+            conn.close()
+            if row and row[0]:
+                return row[0]
+        except:
+            pass
+
+        if provider == "OpenAI":
+            return os.environ.get('OPENAI_API_KEY', '')
+        elif provider == "Anthropic":
+            return os.environ.get('ANTHROPIC_API_KEY', '')
+        elif provider == "Google Gemini":
+            return os.environ.get('GOOGLE_API_KEY', '')
+        elif provider == "Groq":
+            return os.environ.get('GROQ_API_KEY', '')
+        return ""
+
+    def load_template(self):
+        """Load the template code."""
+        try:
+            with open(self.template_path, 'r', encoding='utf-8') as f:
+                self.code_edit.setPlainText(f.read())
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load template: {e}")
+
+    def _show_welcome_message(self):
+        """Show a welcome message in the chat for new templates."""
+        welcome_html = '''
+        <div style="font-family: Segoe UI, sans-serif; padding: 10px;">
+            <div style="background-color: #2d2d2d; border-radius: 8px; padding: 15px; margin-bottom: 15px;">
+                <div style="color: #4ec9b0; font-size: 14px; font-weight: bold; margin-bottom: 10px;">
+                    👋 Welcome to the AI Template Editor
+                </div>
+                <div style="color: #cccccc; line-height: 1.6;">
+                    <p>You can ask me to help you modify this template. Here are some things I can do:</p>
+                    <ul style="margin: 10px 0; padding-left: 20px;">
+                        <li>Fix regex patterns for extracting data</li>
+                        <li>Add support for new invoice formats</li>
+                        <li>Improve error handling</li>
+                        <li>Add new extraction fields</li>
+                        <li>Explain how the template works</li>
+                    </ul>
+                    <p style="color: #9cdcfe; margin-top: 10px;">
+                        💡 <b>Tip:</b> Be specific about what you want to change. For example:<br>
+                        <i>"Change the invoice number regex to match format INV-2024-XXXXX"</i>
+                    </p>
+                </div>
+            </div>
+        </div>
+        '''
+        self.chat_display.setHtml(welcome_html)
+
+    def _validate_syntax(self):
+        """Validate Python syntax of the template code."""
+        code = self.code_edit.toPlainText()
+        try:
+            compile(code, '<template>', 'exec')
+            self.syntax_indicator.setText("✓ Valid")
+            self.syntax_indicator.setStyleSheet("color: #4ec9b0; font-size: 10px;")
+        except SyntaxError as e:
+            self.syntax_indicator.setText(f"✗ Line {e.lineno}: {e.msg}")
+            self.syntax_indicator.setStyleSheet("color: #f48771; font-size: 10px;")
+
+    def _test_template(self):
+        """Test the template by attempting to import it."""
+        code = self.code_edit.toPlainText()
+        try:
+            compile(code, '<template>', 'exec')
+            exec(code, {'__name__': '__main__'})
+            QMessageBox.information(self, "Test Passed", "Template syntax is valid and can be imported!")
+        except Exception as e:
+            QMessageBox.warning(self, "Test Failed", f"Template has errors:\n\n{e}")
+
+    def _format_message_html(self, role: str, content: str) -> str:
+        """Format a chat message as styled HTML."""
+        import html as html_module
+
+        # Process code blocks
+        def replace_code_block(match):
+            code = html_module.escape(match.group(1))
+            return f'</p><pre style="background-color: #0d0d0d; color: #d4d4d4; padding: 12px; border-radius: 6px; font-family: Consolas, monospace; font-size: 11px; margin: 8px 0; border-left: 3px solid #007acc; overflow-x: auto; white-space: pre-wrap;">{code}</pre><p style="margin: 0; line-height: 1.6;">'
+
+        formatted = re.sub(r'```(?:python)?\s*(.*?)\s*```', replace_code_block, content, flags=re.DOTALL)
+
+        # Escape remaining HTML
+        parts = re.split(r'(<pre.*?</pre>)', formatted, flags=re.DOTALL)
+        escaped_parts = []
+        for part in parts:
+            if part.startswith('<pre'):
+                escaped_parts.append(part)
+            else:
+                escaped_parts.append(html_module.escape(part))
+        formatted = ''.join(escaped_parts)
+
+        # Inline code
+        formatted = re.sub(r'`([^`]+)`', r'<code style="background-color: #3c3c3c; color: #ce9178; padding: 2px 6px; border-radius: 3px; font-family: Consolas;">\1</code>', formatted)
+
+        # Newlines
+        parts = re.split(r'(<pre.*?</pre>)', formatted, flags=re.DOTALL)
+        for i, part in enumerate(parts):
+            if not part.startswith('<pre'):
+                parts[i] = part.replace('\n', '<br>')
+        formatted = ''.join(parts)
+
+        if role == 'user':
+            return f'''
+            <div style="margin: 12px 0; text-align: right;">
+                <div style="display: inline-block; max-width: 85%; text-align: left;">
+                    <div style="color: #808080; font-size: 9px; margin-bottom: 4px;">You</div>
+                    <div style="background-color: #264f78; color: #ffffff; padding: 10px 14px; border-radius: 12px 12px 4px 12px;">
+                        <p style="margin: 0; line-height: 1.6;">{formatted}</p>
+                    </div>
+                </div>
+            </div>
+            '''
+        else:
+            return f'''
+            <div style="margin: 12px 0; text-align: left;">
+                <div style="display: inline-block; max-width: 85%; text-align: left;">
+                    <div style="color: #808080; font-size: 9px; margin-bottom: 4px;">AI Assistant</div>
+                    <div style="background-color: #2d2d2d; color: #e0e0e0; padding: 10px 14px; border-radius: 12px 12px 12px 4px; border: 1px solid #404040;">
+                        <p style="margin: 0; line-height: 1.6;">{formatted}</p>
+                    </div>
+                </div>
+            </div>
+            '''
+
+    def _display_chat_history(self):
+        """Display chat history."""
+        if not self.conversation_history:
+            self._show_welcome_message()
+            return
+
+        html_content = '<div style="font-family: Segoe UI, sans-serif;">'
+        for msg in self.conversation_history:
+            role = msg.get('role', 'user')
+            content = msg.get('content', '')
+            html_content += self._format_message_html(role, content)
+        html_content += '</div>'
+        self.chat_display.setHtml(html_content)
+
+    def send_message(self):
+        """Send a message to the AI."""
+        message = self.message_input.toPlainText().strip()
+        if not message:
+            return
+
+        provider = self.provider_combo.currentText()
+        api_key = self._get_api_key(provider)
+
+        if provider != "Ollama" and provider in ["OpenAI", "Anthropic"] and not api_key:
+            QMessageBox.warning(self, "Missing API Key",
+                              f"No API key found for {provider}.\n\n"
+                              "Please configure it in Configuration > Billing tab or set environment variable.")
+            return
+
+        # Get Ollama base URL from settings
+        ollama_base_url = ""
+        if provider == "Ollama":
+            if get_settings_manager and get_settings_manager():
+                ollama_base_url = get_settings_manager().ai.ollama_base_url
+            ollama_base_url = ollama_base_url or "http://localhost:11434"
+
+        # Add user message to history
+        self.conversation_history.append({"role": "user", "content": message})
+        self._display_chat_history()
+        self.message_input.clear()
+
+        # Scroll to bottom
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+        # Disable send, enable cancel
+        self.send_btn.setEnabled(False)
+        self.cancel_btn.setEnabled(True)
+
+        # Start AI request
+        self.chat_thread = AITemplateChatThread(
+            provider=provider,
+            model=self.model_combo.currentText(),
+            api_key=api_key,
+            current_code=self.code_edit.toPlainText(),
+            user_message=message,
+            conversation_history=self.conversation_history[:-1],  # Exclude the message we just added
+            invoice_text=self.metadata.get('invoice_text', ''),
+            base_url=ollama_base_url
+        )
+        self.chat_thread.finished.connect(self._on_response)
+        self.chat_thread.error.connect(self._on_error)
+        self.chat_thread.start()
+
+    def cancel_request(self):
+        """Cancel the current AI request."""
+        if self.chat_thread:
+            self.chat_thread.cancel()
+            self.chat_thread = None
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+    def _on_response(self, response: str):
+        """Handle AI response."""
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+
+        # Extract code if present
+        code_match = re.search(r'```python\s*(.*?)\s*```', response, re.DOTALL)
+        if code_match:
+            # Auto-apply code changes to editor
+            self.code_edit.setPlainText(code_match.group(1))
+            self.pending_code = None
+            self.apply_btn.setEnabled(False)
+
+            # Store response without the code block for chat display
+            response_without_code = re.sub(r'```python\s*.*?\s*```', '[Code applied to editor]', response, flags=re.DOTALL)
+            self.conversation_history.append({"role": "assistant", "content": response_without_code})
+            self._display_chat_history()
+            self._append_system_message("Code changes automatically applied to the editor.")
+        else:
+            self.pending_code = None
+            # Add to history and redisplay
+            self.conversation_history.append({"role": "assistant", "content": response})
+            self._display_chat_history()
+
+        # Scroll to bottom
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _append_system_message(self, message: str, is_error: bool = False):
+        """Append a system notification message to the chat display."""
+        color = "#f48771" if is_error else "#4ec9b0"  # Red for error, teal for info
+        icon = "⚠️" if is_error else "ℹ️"
+        html = f'''
+        <div style="margin: 8px 0; text-align: center;">
+            <div style="display: inline-block; background-color: #252526; color: {color}; padding: 8px 16px; border-radius: 6px; font-size: 10px; border: 1px solid #404040;">
+                {icon} {message}
+            </div>
+        </div>
+        '''
+        current_html = self.chat_display.toHtml()
+        if '</div></body>' in current_html:
+            current_html = current_html.replace('</div></body>', f'{html}</div></body>')
+        else:
+            self.chat_display.append(html)
+            return
+        self.chat_display.setHtml(current_html)
+        scrollbar = self.chat_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _on_error(self, error: str):
+        """Handle AI error."""
+        self.send_btn.setEnabled(True)
+        self.cancel_btn.setEnabled(False)
+        self._append_system_message(f"Error: {error}", is_error=True)
+
+    def apply_changes(self):
+        """Apply the AI-suggested code changes (manual fallback)."""
+        if hasattr(self, 'pending_code') and self.pending_code:
+            self.code_edit.setPlainText(self.pending_code)
+            self.apply_btn.setEnabled(False)
+            self._append_system_message("Code changes applied to the editor.")
+
+    def save_template(self):
+        """Save the modified template."""
+        code = self.code_edit.toPlainText()
+
+        # Validate syntax before saving
+        try:
+            compile(code, '<template>', 'exec')
+        except SyntaxError as e:
+            reply = QMessageBox.question(
+                self, "Syntax Error",
+                f"The template has syntax errors:\n\nLine {e.lineno}: {e.msg}\n\nSave anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        try:
+            # Save template code
+            with open(self.template_path, 'w', encoding='utf-8') as f:
+                f.write(code)
+
+            # Update metadata with conversation history
+            self.metadata['conversation_history'] = self.conversation_history
+            self.metadata['last_modified'] = datetime.now().isoformat()
+            self.metadata['provider'] = self.provider_combo.currentText()
+            self.metadata['model'] = self.model_combo.currentText()
+
+            metadata_path = self.template_path.with_suffix('.ai_meta.json')
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(self.metadata, f, indent=2)
+
+            QMessageBox.information(self, "Saved", "Template saved successfully!")
+            self.template_modified.emit(str(self.template_path))
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to save template: {e}")
+
+
+def main():
+    """Test the dialog standalone."""
+    import sys
+    app = QApplication(sys.argv)
+    dialog = AITemplateGeneratorDialog()
+    dialog.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == '__main__':
+    main()

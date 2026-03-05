@@ -1,0 +1,5 @@
+{
+    "_comment": "TariffMill User Authentication - Users are created on first startup",
+    "_instructions": "On first launch, the app will prompt you to create an admin account. Additional users can be added via the Admin panel (Ctrl+Shift+A).",
+    "users": {}
+}
