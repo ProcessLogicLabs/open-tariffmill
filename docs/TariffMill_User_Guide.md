@@ -2,44 +2,52 @@
 
 **Professional Customs Documentation Processing System**
 
-Version 0.97.34 | Last Updated: January 2026
+Version 0.98.0 | Open Source Edition | March 2026
 
 ---
 
 ## Table of Contents
 
-1. [Introduction](#introduction)
-2. [System Requirements](#system-requirements)
-3. [Installation](#installation)
-4. [Getting Started](#getting-started)
-5. [Invoice Processing](#invoice-processing)
-6. [PDF Processing (OCRMill)](#pdf-processing-ocrmill)
-7. [Parts Database Management](#parts-database-management)
-8. [Reference Data](#reference-data)
-9. [Configuration & Settings](#configuration--settings)
-10. [Profile Management](#profile-management)
-11. [e2Open Integration](#e2open-integration)
-12. [Administration](#administration)
-13. [Troubleshooting](#troubleshooting)
-14. [Keyboard Shortcuts](#keyboard-shortcuts)
+1. [Introduction](#1-introduction)
+2. [System Requirements](#2-system-requirements)
+3. [Installation](#3-installation)
+4. [First-Time Setup](#4-first-time-setup)
+5. [Logging In](#5-logging-in)
+6. [Application Layout](#6-application-layout)
+7. [Invoice Processing](#7-invoice-processing)
+8. [PDF Processing (OCRMill)](#8-pdf-processing-ocrmill)
+9. [Parts Database Management](#9-parts-database-management)
+10. [Reference Data](#10-reference-data)
+11. [Master Data & Profiles](#11-master-data--profiles)
+12. [Settings & Preferences](#12-settings--preferences)
+13. [e2Open Integration](#13-e2open-integration)
+14. [Auto-Updates](#14-auto-updates)
+15. [Keyboard Shortcuts](#15-keyboard-shortcuts)
+16. [Troubleshooting](#16-troubleshooting)
+17. [Appendix](#17-appendix)
 
 ---
 
-## Introduction
+## 1. Introduction
 
-TariffMill is a desktop application designed for import/export businesses, customs brokers, and trade compliance professionals. It automates invoice processing, manages parts databases, and ensures compliance with Section 232 and Section 301 tariff requirements.
+TariffMill is a free, open-source desktop application designed for import/export businesses, customs brokers, and trade compliance professionals. It automates commercial invoice processing, manages parts databases with HTS classifications, and ensures compliance with U.S. Section 232 and Section 301 tariff requirements.
 
-### Key Features
+### What TariffMill Does
 
-- **Intelligent Invoice Processing** - Transform commercial invoices into customs-ready upload sheets
-- **AI-Powered PDF Extraction** - Extract invoice data from PDF documents using customizable templates
-- **Section 232 Automation** - Automatic derivative line creation with prorated values for steel, aluminum, copper, wood, and automotive materials
-- **Parts Master Database** - Centralized management of HTS codes, material compositions, and country of origin data
-- **e2Open Integration** - Export files pre-mapped for direct upload to e2Open Customs Management
+- **Transforms commercial invoices** into customs-ready upload worksheets for e2Open and other customs management systems
+- **Extracts invoice data from PDFs** using AI-powered templates — no manual data entry required
+- **Manages a parts master database** with HTS codes, material compositions, country of origin, and melt/cast/smelt declarations
+- **Automates Section 232 derivative calculations** — splits line items by steel, aluminum, copper, wood, and automotive content with prorated values
+- **Tracks Section 301 exclusions** with expiration dates
+- **Generates CBP-compliant quantity units** from the built-in HTS database
+
+### Who Should Use This Guide
+
+This guide is for **end users** who process invoices, manage parts data, and use the PDF extraction features. For system administration tasks (user management, domain configuration, backups), see the [TariffMill Admin Guide](TariffMill_Admin_Guide.md).
 
 ---
 
-## System Requirements
+## 2. System Requirements
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
@@ -47,640 +55,548 @@ TariffMill is a desktop application designed for import/export businesses, custo
 | RAM | 4 GB | 8 GB |
 | Disk Space | 200 MB | 500 MB |
 | Display | 1280 x 720 | 1920 x 1080 |
+| Network | Not required | For shared database & templates |
 
 ### Supported Platforms
 
-- **Windows**: Native installer or portable executable
-- **Linux/macOS**: Python pip installation
+| Platform | Installation Method |
+|----------|-------------------|
+| **Windows** | Installer (.exe) or portable executable |
+| **Linux** | pip install from GitHub |
+| **macOS** | pip install from GitHub |
 
 ---
 
-## Installation
+## 3. Installation
 
 ### Windows Installer (Recommended)
 
-1. Download `TariffMill_Setup_x.xx.xx.exe` from the [Releases](https://github.com/ProcessLogicLabs/TariffMill/releases) page
+1. Download `TariffMill_Setup_x.xx.x.exe` from the [Releases](https://github.com/ProcessLogicLabs/open-tariffmill/releases) page
 2. Run the installer and follow the prompts
 3. Launch TariffMill from the Start Menu or Desktop shortcut
 
 ### Windows Portable
 
 1. Download `TariffMill.exe` from the Releases page
-2. Place in your preferred location
-3. Double-click to run (no installation required)
+2. Place it in your preferred folder
+3. Double-click to run — no installation required
 
-#### Windows SmartScreen Warning
+> **Note:** The portable version stores its database and settings locally alongside the executable. It is ideal for USB drives or environments where you cannot install software.
 
-On first run, Windows may display "Windows protected your PC" because the application is new. To proceed:
+### Linux / macOS (pip)
+
+```bash
+pip install git+https://github.com/ProcessLogicLabs/open-tariffmill.git
+tariffmill
+```
+
+### From Source
+
+```bash
+git clone https://github.com/ProcessLogicLabs/open-tariffmill.git
+cd open-tariffmill
+python -m venv venv
+source venv/bin/activate        # Linux/macOS
+.\venv\Scripts\activate         # Windows
+pip install -r requirements.txt
+python Tariffmill/tariffmill.py
+```
+
+### Windows SmartScreen Warning
+
+On first run, Windows may display **"Windows protected your PC"** because the application is new. To proceed:
 
 1. Click **"More info"**
 2. Click **"Run anyway"**
 
-### Linux/macOS (pip)
+---
 
-```bash
-pip install git+https://github.com/ProcessLogicLabs/TariffMill.git
-tariffmill
-```
+## 4. First-Time Setup
+
+When TariffMill launches for the first time and no user accounts exist, it displays a **First-Run Setup Wizard** to create your admin account.
+
+### Step 1: Create Your Admin Account
+
+| Field | Description | Rules |
+|-------|-------------|-------|
+| **Name** | Your display name | Required |
+| **Email** | Your login email | Required, must contain `@` |
+| **Password** | Account password | Required, minimum 6 characters |
+| **Confirm Password** | Re-enter password | Must match password |
+
+Fill in the form and click **Create Account**. Your credentials are saved to `auth_users.json` in the application directory.
+
+### Step 2: Log In
+
+After the admin account is created, the Login dialog appears. Enter the email and password you just created.
+
+### Step 3: Configure Your Folders
+
+Once logged in, go to **Settings** > **Settings...** and set your **Input Folder** and **Output Folder** paths. Alternatively, create a **Folder Profile** from the Invoice Processing tab.
+
+### Step 4: Import Reference Data
+
+Go to the **References** menu:
+
+1. **HTS Database...** — Import your HTS tariff data (JSON or CSV from USITC)
+2. **Section 232 Tariffs...** — Import Section 232 tariff classifications
+3. **Section 232 Actions...** — Import Chapter 99 action codes
+
+### Step 5: Set Up Your Parts Database
+
+Go to **Master Data** > **Master Data...** > **Parts Import** tab to bulk-import your parts with HTS codes and material compositions.
 
 ---
 
-## Getting Started
+## 5. Logging In
 
-### First Launch
+### Email/Password Login
 
-1. **Login** - Enter your credentials or create a new account
-2. **Configure Folders** - Set your input and output directories via **Preferences**
-3. **Import Reference Data** - Load HTS database and Section 232 tariffs via **References**
-4. **Set Up Parts Database** - Import your parts with HTS codes and material compositions
+1. Enter your **Email** and **Password**
+2. Click **Sign In**
 
-### Application Layout
+The email field remembers your last login for convenience.
 
-TariffMill uses a tabbed interface with three main sections:
+### Windows Domain Auto-Login
 
-| Tab | Purpose |
-|-----|---------|
-| **Invoice Processing** | Process CSV/Excel invoices and generate upload worksheets |
-| **PDF Processing** | Extract data from PDF invoices using AI-powered OCR |
-| **Parts View** | Manage your parts master database |
+If your administrator has configured Windows domain authentication, TariffMill will automatically log you in using your Windows credentials. No login dialog is shown.
+
+### Signing Out
+
+Go to **Session** > **Sign Out** to log out and return to the login screen.
+
+---
+
+## 6. Application Layout
 
 ### Menu Bar
 
-| Menu | Contents |
-|------|----------|
-| **Preferences** | Application settings and configuration |
-| **Account** | User info, statistics, sign out |
-| **References** | HTS database, Section 232 tariffs, customs configuration |
-| **Profiles** | Invoice mapping and export profile management |
-| **Help** | License, updates, logs, about |
+| Menu | Purpose |
+|------|---------|
+| **Session** | Current user info, sign out, division user management |
+| **Settings** | Application preferences and configuration |
+| **Master Data** | Invoice mapping profiles, output mapping, parts import, MID management |
+| **References** | HTS database, Section 232 tariffs, Section 232 actions |
+| **Help** | Check for updates, view log, statistics, about |
+
+### Main Tabs
+
+| Tab | Purpose |
+|-----|---------|
+| **Invoice Processing** | Process CSV/Excel invoices into customs-ready worksheets |
+| **PDF Processing** | Extract data from PDF invoices using AI templates |
+| **Parts View** | Search, edit, and manage the parts master database |
 
 ---
 
-## Invoice Processing
+## 7. Invoice Processing
 
 The Invoice Processing tab is the primary workflow for converting commercial invoices into customs-ready upload worksheets.
 
-### Processing Workflow
+### Workflow Overview
 
 ```
-1. Select Invoice → 2. Enter Values → 3. Process → 4. Review → 5. Export
+Select Invoice -> Enter Values -> Process -> Review -> Export
 ```
 
-### Step-by-Step Guide
+### Left Panel
 
-#### Step 1: Select Invoice File
+#### Shipment File Section
 
-1. Choose a **Folder Profile** from the dropdown (or use default folders)
-2. Click **Refresh** to scan the input directory
-3. Select an invoice file from the **Input Files** list
-   - Supported formats: `.csv`, `.xlsx`, `.xls`
+1. **Folder Profile** dropdown — Switch between saved input/output folder sets
+2. **Map Profile** dropdown — Choose an invoice column mapping profile
+3. **Input Files** list — Shows CSV and Excel files in the input folder
+4. **Refresh** / **Delete** / **Sort** buttons
 
-#### Step 2: Enter Invoice Values
+#### Invoice Values Section
 
 | Field | Description | Required |
 |-------|-------------|----------|
-| **CI Value (USD)** | Total commercial invoice value | Yes |
-| **Net Weight (kg)** | Shipment net weight for calculations | No |
-| **MID** | Manufacturer ID from dropdown | Yes |
-| **Division** | Your division (if applicable) | Conditional |
-| **File Number** | Billing reference number | Yes |
+| **CI Value (USD)** | Total commercial invoice value in US dollars | Yes |
+| **Net Weight (kg)** | Shipment total net weight in kilograms | No |
+| **MID** | Manufacturer ID — select from dropdown (type to search) | Yes |
+| **Division** | Business division (if configured) | Conditional |
+| **File Number** | Reference number for the entry | Yes |
 
-The **Invoice Check** indicator shows validation status:
-- **Green checkmark** - Values match the calculated totals
-- **Red X** - Discrepancy detected; click **Edit Values** to correct
+**Invoice Check** indicator:
+- **Green checkmark** — Values match the calculated totals
+- **Red X** — Discrepancy detected; click **Edit Values** to correct
 
-#### Step 3: Process Invoice
+#### Action Buttons
 
-1. Click **Process Invoice**
-2. TariffMill matches parts to your database and applies:
-   - HTS codes and descriptions
-   - Material compositions (steel, aluminum, copper, wood, auto percentages)
-   - Section 232 derivative calculations
-   - Declaration codes and country of origin data
-   - CBP quantity units
+| Button | Action |
+|--------|--------|
+| **Process Invoice** | Process the selected invoice against the parts database |
+| **Reprocess** | Re-process to pick up database changes since last run |
+| **Add Missing** | Open dialog to add unmatched parts to the database |
+| **Clear All** | Clear the current session and start fresh |
 
-#### Step 4: Review Results
+#### Exported Files Section
 
-The **Result Preview** table displays processed data with color-coded rows:
+Shows previously exported CSV files. Double-click to open in Excel.
 
-| Color | Material Type |
-|-------|--------------|
-| Gray | Steel (Declaration Code 08) |
-| Blue | Aluminum (Declaration Code 07) |
-| Orange | Copper |
-| Brown | Wood |
-| Dark Green | Automotive |
-| White | Non-232 items |
-| Highlighted | Section 301 exclusions |
+### Right Panel — Result Preview
 
-**Preview Features:**
-- Click column headers to sort
-- Right-click for context menu options
-- Double-click cells to edit values
-- Use **Edit Worksheet** for bulk modifications
+After processing, the result preview table displays all line items with their tariff data.
 
-#### Step 5: Export Worksheet
+#### Color-Coded Rows
 
-1. Click **Export Worksheet** (button changes after processing)
-2. Choose export location (defaults to output folder)
-3. File is generated with timestamp: `InvoiceName_YYYYMMDD_HHMMSS.xlsx`
+| Color | Meaning |
+|-------|---------|
+| **Gray** | Steel content (Declaration Code 08) |
+| **Blue** | Aluminum content (Declaration Code 07) |
+| **Orange** | Copper content |
+| **Brown** | Wood content |
+| **Dark Green** | Automotive content |
+| **White** | Non-232 items |
+| **Highlighted** | Section 301 exclusion items |
+
+#### Working with the Preview
+
+- **Double-click** a cell to edit its value
+- **Right-click** a column header for options: auto-fit width, reset widths
+- Column widths and visibility are saved per user
+
+### Exporting
+
+Click **Export Worksheet** after reviewing. The file is saved as `InvoiceName_YYYYMMDD_HHMMSS.xlsx`.
 
 ### Section 232 Derivative Processing
 
 TariffMill automatically creates derivative line items for materials subject to Section 232 tariffs:
 
-**How It Works:**
 1. Each line item with material content is split into derivative lines
-2. Values are prorated based on material percentages
-3. Declaration codes are assigned automatically:
-   - **08** - Steel derivatives
-   - **07** - Aluminum derivatives
-4. Country of melt/pour/cast/smelt codes are populated from parts database
+2. Values are prorated based on material percentages from the parts database
+3. Declaration codes are assigned: **08** (Steel), **07** (Aluminum)
+4. Country of melt/pour/cast/smelt codes are populated from the parts database
 
-**Example:**
-A $1,000 part with 30% steel and 10% aluminum becomes:
-- Original line: $600 (remaining value)
-- Steel derivative: $300 (Declaration Code 08)
-- Aluminum derivative: $100 (Declaration Code 07)
+**Example:** A $1,000 part with 30% steel and 10% aluminum becomes:
+
+| Line | Value | Declaration |
+|------|-------|------------|
+| Original | $600 | (remaining value) |
+| Steel derivative | $300 | Code 08 |
+| Aluminum derivative | $100 | Code 07 |
 
 ---
 
-## PDF Processing (OCRMill)
+## 8. PDF Processing (OCRMill)
 
 The PDF Processing tab extracts invoice data from PDF documents using AI-powered templates.
 
-### Features
+### Invoice Processing Sub-Tab
 
-- **Drag & Drop** - Drop PDF files directly into the application
-- **Batch Processing** - Process multiple PDFs at once
-- **Folder Monitoring** - Automatically process new files as they arrive
-- **Template Library** - Pre-built and custom templates for different invoice formats
+#### Input Files (PDFs)
 
-### Processing PDF Invoices
+Lists PDF files in your configured input folder. Click **Refresh** to rescan. Double-click to open in your default PDF viewer.
 
-#### Single File Processing
+#### Output Files (CSVs)
 
-1. Navigate to the **PDF Processing** tab
-2. Set **Input Folder** (where PDFs are located)
-3. Set **Output Folder** (where extracted data will be saved)
-4. Select a PDF from the **Input Files** list
-5. Click **Process Single File**
-6. Review extracted data in the **Output Files** list
+Lists extracted CSV results. Click to preview. Use **Refresh** to rescan and **Delete** to remove a file.
 
-#### Batch Processing
+#### Processing Actions
 
-1. Click **Process Multiple Files**
-2. Select PDFs to process in the dialog
-3. Click **Start Batch**
-4. Monitor progress in the status area
+| Button | Action |
+|--------|--------|
+| **Start Monitoring** | Toggle folder monitoring — auto-process new PDFs |
+| **Process PDF File...** | Process a single selected PDF |
+| **Process Folder Now** | Batch-process all PDFs in the input folder |
+| **Send to Tariffmill** | Move extracted CSV to the Invoice Processing tab |
 
-#### Folder Monitoring
+#### Drag & Drop
 
-1. Configure input/output folders
-2. Toggle **Monitor Folder** ON
-3. Drop PDFs into the input folder
-4. Files are automatically processed and results appear in output
+Drag PDF files directly onto the **Drop Zone** at the top of the right panel.
 
-### AI Template System
+#### Multi-invoice Output Mode
 
-Templates define how TariffMill extracts data from specific invoice formats.
+- **Split** — One CSV per invoice
+- **Combine** — All invoices merged into a single CSV
 
-#### Using Existing Templates
+### AI Templates Sub-Tab
 
-1. Go to the **Templates** sub-tab
-2. Browse the template list
-3. Templates are automatically matched based on invoice content
+> **Note:** This tab is only visible if your account has AI Assistant access (granted by an admin).
 
-#### Creating New Templates
+The AI Templates tab provides an integrated template editor with a chat interface powered by an external AI service. Use it to create or modify PDF extraction templates for specific invoice formats.
 
-1. Click **New Template**
-2. Use the AI assistant to generate extraction rules:
-   - Describe the invoice format
-   - Identify key fields (part numbers, quantities, values)
-   - Refine with the chat interface
-3. Click **Save** when satisfied
+> **Cost Warning:** The AI Template Generator makes API calls to external AI services (Anthropic Claude, OpenAI, etc.) that **charge per use**. Each interaction incurs costs on your API account. Monitor your provider's usage dashboard to track spending. TariffMill does not manage or limit your API usage.
+>
+> **Disclaimer:** This feature has not been extensively tested and is provided as-is. AI-generated templates may contain errors and should always be validated against known invoice data before use in production. Generated code may require Python knowledge to review and correct.
 
-#### Template Fields
+### Template System Overview
 
-Templates can extract:
-- Part Number
-- Description
-- Quantity
-- Unit Price
-- Extended Value
-- Country of Origin
-- HTS Code (if present on invoice)
+Templates define how TariffMill extracts data from specific invoice formats. Each template calculates a **confidence score** (0-1.0) and the highest-scoring template is used.
+
+**Template sources:**
+- **Bundled templates** — Included with the application
+- **Shared templates** — Loaded from a network folder (configured in Settings)
+- **Local templates** — Custom templates you create
+
+**Extracted fields:** Part Number, Description, Quantity, Unit Price, Extended Value, Country of Origin, HTS Code (if on invoice)
 
 ### Sending to Invoice Processing
 
-After extraction:
 1. Select output file in the **Output Files** list
-2. Click **Send to Invoice Processing**
+2. Click **Send to Tariffmill**
 3. Data transfers to the Invoice Processing tab for tariff application
 
 ---
 
-## Parts Database Management
+## 9. Parts Database Management
 
-The Parts View tab provides access to your parts master database.
+The **Parts View** tab provides full access to your parts master database.
 
-### Parts Database Fields
+### Parts Table Columns
 
-| Field | Description |
-|-------|-------------|
-| **Part Number** | Unique identifier (required) |
-| **HTS Code** | 10-digit Harmonized Tariff Schedule code (required) |
-| **Description** | Part description |
-| **MID** | Associated Manufacturer ID |
-| **Country** | Country of origin |
-| **Steel %** | Steel content percentage (0-100) |
-| **Aluminum %** | Aluminum content percentage (0-100) |
-| **Copper %** | Copper content percentage (0-100) |
-| **Wood %** | Wood content percentage (0-100) |
-| **Auto %** | Automotive content percentage (0-100) |
-| **Country Melt** | Steel melt/pour country |
-| **Country Cast** | Casting country |
-| **Country Smelt** | Smelting country (aluminum/copper) |
+| Column | Description | Editable |
+|--------|-------------|----------|
+| Part Number | Unique identifier (primary key) | Yes |
+| Description | Part description | Yes |
+| HTS Code | 10-digit Harmonized Tariff Schedule code | Yes |
+| Country of Origin | Manufacturing country | Yes |
+| MID | Manufacturer ID | Yes |
+| Client Code | Customer/client identifier | Yes |
+| Steel / Aluminum / Copper / Wood / Auto % | Material percentages (0-100) | Yes |
+| Qty Unit | CBP quantity unit of measure | Yes |
+| HTS Verified | Verification status | Yes |
+| Sec 301 Exclusion | Section 301 exclusion tariff code | Yes |
+| Created Date | When the part was first added | Read-only |
+| Updated Date | When the part was last modified | Read-only |
 
-### Importing Parts
+### Action Buttons
 
-1. Go to **Profiles** → **Parts Import** tab
-2. Click **Load CSV/Excel File**
-3. Map columns by dragging source columns to target fields
-4. Click **Import Now**
-
-**Required mappings:**
-- Part Number
-- HTS Code
-
-### Editing Parts
-
-1. In **Parts View**, locate the part to edit
-2. Double-click the cell to modify
-3. Press Enter to save changes
+| Button | Action |
+|--------|--------|
+| **Add Row** | Insert a new blank part entry |
+| **Delete Selected** | Remove selected parts from the database |
+| **Save Changes** | Persist all edits to the database |
+| **Refresh** | Reload parts from the database |
+| **Export Missing HTS** | Export parts missing CBP quantity units |
+| **Verify HTS** | Validate all HTS codes against the reference database |
+| **Export by Client** | Filter and export parts for a specific client |
 
 ### Searching Parts
 
-Use the search bar at the top of the Parts View to filter by:
-- Part number
-- HTS code
-- Description
-- Any visible column
+#### Quick Search Presets
+
+| Preset | What It Shows |
+|--------|--------------|
+| **Show All Parts** | Entire parts database |
+| **Missing HTS Codes** | Parts without an HTS code |
+| **Invalid HTS Codes** | Parts with HTS codes not in the reference database |
+| **Steel Parts** | Parts with steel percentage > 0% |
+| **Aluminum Parts** | Parts with aluminum percentage > 0% |
+
+#### Search by Field
+
+Select a field (Part Number, Description, HTS Code, Country, MID, Client, etc.), a match type (Contains, Equals, Starts with, etc.), and enter your search term.
+
+#### Custom SQL
+
+Check **Show Advanced SQL** to enter custom queries like:
+
+```sql
+SELECT * FROM parts_master WHERE steel_pct > 50 AND country_origin = 'CN'
+```
+
+#### Table Filter
+
+The filter bar above the table lets you type to instantly filter visible rows. Use **Export Visible Rows** to export the current filtered view.
+
+### Importing Parts
+
+1. Go to **Master Data** > **Master Data...** > **Parts Import** tab
+2. Click **Load CSV/Excel File**
+3. Map source columns to target fields (Part Number and HTS Code are required)
+4. Preview the import, then click **Import Now**
 
 ---
 
-## Reference Data
+## 10. Reference Data
 
-Access reference data via **References** menu → **References...**
+Access reference databases via the **References** menu.
 
-### HTS Database Tab
+### HTS Database (References > HTS Database...)
 
-The HTS database provides tariff code lookup and CBP quantity unit information.
+Import HTS data via JSON (recommended) or CSV from USITC. Search by HTS code to view full tariff descriptions, duty rates, and units of quantity.
 
-#### Importing HTS Data
+### Section 232 Tariffs (References > Section 232 Tariffs...)
 
-**Recommended Method (JSON):**
-1. Click **Import from JSON File**
-2. Select the CBP HTS export file
-3. Wait for import to complete
+Manage Section 232 tariff classifications. Filter by material type, view Chapter 99 codes and duty rates. Import from CSV/Excel.
 
-**Alternative Method (CSV):**
-1. Click **Open USITC Download Page**
-2. Download the current HTS schedule
-3. Click **Import from CSV File**
-4. Select the downloaded file
+### Section 232 Actions (References > Section 232 Actions...)
 
-#### Using HTS Lookup
-
-1. Enter an HTS code in the search box
-2. View:
-   - Full tariff description
-   - Unit of quantity (for CBP reporting)
-   - Duty rates
-   - Special program indicators
-
-### Customs Config Tab
-
-Manage Section 232 tariff classifications.
-
-#### Importing Section 232 Tariffs
-
-1. Click **Import Section 232 Tariffs**
-2. Select your tariff classification CSV/Excel file
-3. Columns should include: HTS Code, Material Type, Classification
-
-#### Filtering Tariffs
-
-- Use the **Material** dropdown to filter by: Steel, Aluminum, Copper, Wood, Auto
-- Toggle **Color by Material** to visualize classifications
-- Search by HTS code or description
-
-### Section 232 Actions Tab
-
-Manage Chapter 99 tariff action codes.
-
-#### Importing Action Codes
-
-1. Click **Import Actions CSV**
-2. Select file containing tariff action codes and rates
+Manage Chapter 99 tariff action codes with effective/expiration dates, rates, and declaration requirements.
 
 ---
 
-## Configuration & Settings
+## 11. Master Data & Profiles
 
-Access via **Preferences** menu → **Preferences...**
-
-### Appearance Tab
-
-| Setting | Description |
-|---------|-------------|
-| **Theme** | Application color scheme (7 options) |
-| **Font Size** | UI text size (8-16pt) |
-| **Row Height** | Preview table row height (22-40px) |
-| **Excel Viewer** | Application to open exported files |
-| **Row Colors** | Customize colors for each material type |
-
-**Available Themes:**
-- System Default
-- Fusion Light
-- Fusion Dark
-- Ocean
-- Light Cyan
-- Muted Cyan
-- macOS
-
-### Data Management Tab
-
-| Setting | Description |
-|---------|-------------|
-| **Input Folder** | Default location for invoice files |
-| **Output Folder** | Default location for exported worksheets |
-| **Auto-refresh** | Automatically scan input folder for new files |
-| **Delete Processed** | Remove input files after successful export |
-| **Network Drive Support** | Enable for mapped network drives |
-
-### Backup & Recovery Tab
-
-| Setting | Description |
-|---------|-------------|
-| **Automatic Backup** | Enable scheduled database backups |
-| **Backup Frequency** | Daily, weekly, or custom schedule |
-| **Retention** | Number of backups to keep |
-
-### Startup & Updates Tab
-
-| Setting | Description |
-|---------|-------------|
-| **Check for Updates** | Automatically check on startup |
-| **Auto-update** | Download and install updates automatically |
-
-### Domain Configuration Tab
-
-| Setting | Description |
-|---------|-------------|
-| **Shared Templates** | Network folder for shared PDF templates |
-| **Custom Templates** | Local folder for personal templates |
-
----
-
-## Profile Management
-
-Access via **Profiles** menu → **Profiles...**
+Access via **Master Data** > **Master Data...**
 
 ### Invoice Mapping Profiles
 
-Save column mapping configurations for different invoice formats.
+Save column mapping configurations for different invoice formats. Select from the **Map Profile** dropdown on the Invoice Processing tab.
 
-#### Creating a Mapping Profile
+### Output Mapping
 
-1. Process an invoice and configure column mappings
-2. Go to **Profiles** → **Invoice Mapping** tab
-3. Click **Save as Profile**
-4. Enter a profile name
-5. Click **Save**
+Control which columns appear in exports, their order, and material colors. Save as reusable profiles.
 
-#### Using a Mapping Profile
+### Parts Import
 
-1. Select profile from the dropdown in Invoice Processing tab
-2. Column mappings are automatically applied
+Bulk-import parts from Excel or CSV with column mapping and duplicate handling.
 
-### Output Mapping Profiles
+### MID Management
 
-Control which columns appear in exported worksheets.
-
-#### Creating an Export Profile
-
-1. Go to **Profiles** → **Output Mapping** tab
-2. Configure:
-   - Column visibility (check/uncheck columns)
-   - Column order (drag to reorder)
-   - Export colors per material type
-3. Click **Save as New Profile**
-4. Enter profile name
-
-#### Switching Export Profiles
-
-Use the export profile dropdown in the Invoice Processing tab to quickly switch between configurations.
+Manage Manufacturer IDs: MID code, manufacturer name, customer ID, and related parties (Y/N).
 
 ### Folder Profiles
 
-Save input/output folder combinations for quick switching.
-
-#### Creating a Folder Profile
-
-1. Click **Manage** next to Folder Profile dropdown
-2. Click **New Profile**
-3. Enter profile name
-4. Set input and output folder paths
-5. Click **Save**
+Create named input/output folder pairs for quick switching. Folder profiles are per-user. The last-used profile is restored on startup.
 
 ---
 
-## e2Open Integration
+## 12. Settings & Preferences
 
-TariffMill exports are pre-mapped for e2Open's Customs Management Invoice Import module.
+Access via **Settings** > **Settings...**
 
-### Upload Mapping Reference
+### General Settings
 
-TariffMill export columns map directly to e2Open import fields:
+Theme (7 options), font size (8-16pt), preview row height (22-40px), window geometry persistence.
 
-#### Commercial Invoice Lines
+### PDF Processing Settings
+
+Input/output folder paths, poll interval, auto-start monitoring, multi-invoice consolidation.
+
+### AI Provider Settings
+
+AI service provider, API key, model selection, temperature, token limit.
+
+> **Note:** Configuring an AI provider API key enables the AI Template Generator, which incurs costs per API call. See the [AI Assistant](#ai-templates-sub-tab) section for important cost and limitation details.
+
+### Templates Settings
+
+Shared templates folder (network path), local templates folder.
+
+### Database Settings
+
+Database path, backup folder, auto-backup toggle, backup frequency, retention count, designated backup machine.
+
+### Updates Settings
+
+Check for updates on startup, silent installation mode.
+
+---
+
+## 13. e2Open Integration
+
+TariffMill exports are pre-mapped for direct upload to e2Open Customs Management.
+
+### Column Mapping Reference
 
 | TariffMill Column | e2Open Field |
 |-------------------|--------------|
 | Part Number | Part Number |
 | Value | Value |
 | MID | Manufacturer |
-
-#### Tariff Classification Lines
-
-| TariffMill Column | e2Open Field |
-|-------------------|--------------|
 | HTS | Tariff No |
 | Qty 1 Unit | Qty 1 Class |
 | Qty 2 Unit | Qty 2 Class |
-
-#### Additional Declarations
-
-| TariffMill Column | e2Open Field |
-|-------------------|--------------|
 | Declaration Code | Declaration Type Cd |
 | Country Melt Pour | Country Melt Pour Cd |
 | Country Cast | Country Cast |
 | Primary Country Smelt | Primary Country Smelt |
-| Primary Country Applic | Primary Country Applic |
 
-### Upload Configuration
+### Benefits
 
-In e2Open Customs Management:
-1. Go to **Invoice Import** → **Upload Mapping**
-2. Select or create mapping type: **PARTS PLUS**
-3. Map fields according to the reference above
-4. Save configuration
-
-### Importing TariffMill Export
-
-1. Export worksheet from TariffMill
-2. In e2Open, navigate to **Invoice Import**
-3. Select your upload mapping profile
-4. Browse to the TariffMill export file
-5. Click **Upload**
-6. Review imported data
-
-### Benefits of Integration
-
-- **No Manual Line Splitting** - Derivative lines pre-created with prorated values
-- **Skip Declarations Dialog** - Melt/Smelt/Cast codes pre-populated
-- **Auto CBP Quantities** - Qty 1 & 2 units from HTS database
-- **Direct Upload** - No reformatting required
+- No manual line splitting — derivative lines pre-created with prorated values
+- No declarations dialog — melt/smelt/cast codes pre-populated
+- CBP quantities from HTS database
+- Direct upload — no reformatting required
 
 ---
 
-## Administration
+## 14. Auto-Updates
 
-### User Statistics
+TariffMill checks for new versions on GitHub and can install updates automatically.
 
-View processing metrics via **Account** → **Statistics...**
+1. On startup (if enabled), checks the GitHub Releases API
+2. If a newer version is found, shows a notification with release notes
+3. Click **Download & Install** for automatic installation, or **View on GitHub** for manual download
 
-- Total files processed
-- Processing by date range
-- OCRMill extraction statistics
-- User activity summary
-
-### Division Administration
-
-Division administrators can manage users in their division:
-
-1. **Account** → **Manage Division Users...**
-2. View users assigned to your division
-3. Edit user roles and permissions
-4. Deactivate users as needed
-
-### License Management
-
-**Account** → **License & Activation...**
-
-- View license status (Licensed, Trial, Expired)
-- Enter activation key
-- Check days remaining on trial
+Configure in **Settings** > **Updates** page. Manual check: **Help** > **Check for Updates...**
 
 ---
 
-## Troubleshooting
-
-### Common Issues
-
-#### "File Number Required" Error
-
-**Cause:** File number field is empty or invalid
-
-**Solution:**
-1. Enter a valid file number in the required format
-2. Check division file number pattern requirements
-
-#### Invoice Values Don't Match
-
-**Cause:** Calculated total differs from entered CI Value
-
-**Solution:**
-1. Click **Edit Values** to review line items
-2. Adjust values to match commercial invoice
-3. Re-process invoice
-
-#### Parts Not Found
-
-**Cause:** Part numbers in invoice don't match database
-
-**Solution:**
-1. Import missing parts via **Profiles** → **Parts Import**
-2. Verify part number format matches exactly
-3. Check for leading/trailing spaces
-
-#### PDF Extraction Fails
-
-**Cause:** No matching template or poor PDF quality
-
-**Solution:**
-1. Try a different template
-2. Create a custom template for this invoice format
-3. Ensure PDF is not image-only (needs text layer)
-
-### Application Logs
-
-View detailed logs via **Help** → **View Log**
-
-- Copy logs for support requests
-- Clear logs to free space
-
-### Support
-
-- **GitHub Issues:** [github.com/ProcessLogicLabs/TariffMill/issues](https://github.com/ProcessLogicLabs/TariffMill/issues)
-- **Documentation:** This guide and in-app help
-
----
-
-## Keyboard Shortcuts
+## 15. Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+S` | Save current work |
-| `Ctrl+P` | Process invoice |
-| `Ctrl+E` | Export worksheet |
-| `Ctrl+R` | Refresh file list |
-| `F5` | Refresh current view |
-| `Ctrl+F` | Search/Find |
-| `Ctrl+Shift+A` | Admin panel (authorized users) |
+| `Ctrl+Shift+A` | Open Admin Panel (admin users only) |
+| `F5` | Refresh current tab |
+| `Enter` | Process/search (context-dependent) |
+| `Double-click` | Edit a table cell |
 
 ---
 
-## Appendix
+## 16. Troubleshooting
+
+### Common Issues
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| "File Number Required" | Empty or invalid file number | Enter a valid file number matching the division's format |
+| Values don't match | Calculated total differs from CI Value | Click **Edit Values** to review and correct line items |
+| Parts not found | Part numbers don't match database | Click **Add Missing** or import via Parts Import |
+| PDF extraction fails | No matching template or image-only PDF | Create a template or ensure PDF has a text layer |
+| App doesn't start | Missing dependencies | Reinstall from the latest release |
+
+### Viewing Logs
+
+Go to **Help** > **View Log** to see detailed application logs.
+
+### Getting Help
+
+- **GitHub Issues:** [github.com/ProcessLogicLabs/open-tariffmill/issues](https://github.com/ProcessLogicLabs/open-tariffmill/issues)
+- **Source Code:** [github.com/ProcessLogicLabs/open-tariffmill](https://github.com/ProcessLogicLabs/open-tariffmill)
+
+---
+
+## 17. Appendix
 
 ### Supported File Formats
 
-**Input:**
-- CSV (.csv)
-- Excel (.xlsx, .xls)
-- PDF (.pdf) - via OCRMill
-
-**Output:**
-- Excel Workbook (.xlsx)
+| Direction | Formats |
+|-----------|---------|
+| **Input** | CSV (.csv), Excel (.xlsx, .xls), PDF (.pdf) |
+| **Output** | Excel Workbook (.xlsx) |
 
 ### Material Declaration Codes
 
-| Code | Material | Description |
-|------|----------|-------------|
-| 07 | Aluminum | Aluminum and aluminum derivatives |
-| 08 | Steel | Steel and steel derivatives |
+| Code | Material |
+|------|----------|
+| 07 | Aluminum and aluminum derivatives |
+| 08 | Steel and steel derivatives |
 
 ### Data Privacy
 
-TariffMill is designed with pass-through architecture:
-- Commercial invoice data is **not stored** permanently
-- Data passes through for transformation only
-- Client-sensitive information remains transient
+- Commercial invoice data is **not stored** permanently — it passes through for transformation only
+- No telemetry or analytics are collected
+- No data is sent to external servers (except optional AI API calls for template generation)
+- All data remains on your machine or your configured network database
+
+### Settings Storage
+
+| Location | What's Stored | Scope |
+|----------|--------------|-------|
+| **SQLite database** (app_config table) | Shared settings, allowed domains, template paths | All users |
+| **Windows Registry** (HKCU\Software\TariffMill) | Theme, font size, window geometry, column widths | Per user |
+| **auth_users.json** | User accounts, passwords (hashed), roles | All users |
+| **config.ini** | Database path, backup settings | Per installation |
 
 ---
 
-*TariffMill - Professional Customs Documentation Processing*
+*TariffMill — Professional Customs Documentation Processing*
 
-*Copyright ProcessLogicLabs. All rights reserved.*
+*Open Source Edition — MIT License*
+
+*Copyright (c) 2024-2026 Process Logic Labs, LLC*
