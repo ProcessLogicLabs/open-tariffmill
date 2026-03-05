@@ -33,7 +33,7 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 
 ; Uninstall info
-UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayIcon={app}\_internal\Resources\icon.ico
 UninstallDisplayName={#MyAppName}
 
 [Languages]
@@ -49,9 +49,9 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Source: "auth_users.json"; DestDir: "{app}"; Flags: ignoreversion confirmoverwrite
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\Resources\icon.ico"; WorkingDir: "{app}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\_internal\Resources\icon.ico"; WorkingDir: "{app}"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\Resources\icon.ico"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\_internal\Resources\icon.ico"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
 ; DISABLED: Setting env var during install can cause hangs on fresh installs
