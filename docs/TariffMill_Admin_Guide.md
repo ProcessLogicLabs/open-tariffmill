@@ -2,7 +2,7 @@
 
 **System Administration, User Management & Deployment**
 
-Version 0.98.0 | Open Source Edition | March 2026
+Version 0.99.0 | Open Source Edition | March 2026
 
 ---
 
@@ -459,7 +459,7 @@ Requires [Inno Setup 6](https://jrsoftware.org/isinfo.php):
 "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" tariffmill_setup.iss
 ```
 
-Output: `installer_output/TariffMill_Setup_0.98.0.exe`
+Output: `installer_output/TariffMill_Setup_0.99.0.exe`
 
 ---
 

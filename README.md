@@ -3,7 +3,7 @@
 **Professional Customs Documentation Processing System**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.98.0-green.svg)](Tariffmill/version.py)
+[![Version](https://img.shields.io/badge/version-0.99.0-green.svg)](Tariffmill/version.py)
 
 TariffMill is a free, open-source desktop application for import/export businesses, customs brokers, and trade compliance professionals. It automates invoice processing, manages parts databases, and ensures compliance with U.S. Section 232 and Section 301 tariff requirements.
 
@@ -256,9 +256,9 @@ No data is sent to AI providers unless you explicitly use the AI Template Genera
 
 ## Version
 
-**Current Version**: v0.98.0
+**Current Version**: v0.99.0
 
-### What's New in v0.98.0
+### What's New in v0.99.0
 
 - **Open Source Release** — Free under the MIT License
 - **First-Run Setup Wizard** — Create your admin account on first launch (no pre-configured users needed)
