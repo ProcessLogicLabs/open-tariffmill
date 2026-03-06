@@ -37,8 +37,6 @@ a = Analysis(
         (os.path.join(tariffmill_dir, 'Resources', 'References', 'CBP_232_tariffs.xlsx'), 'Resources/References'),
         (os.path.join(tariffmill_dir, 'Resources', 'References', 'SEC232.txt'), 'Resources/References'),
         (os.path.join(tariffmill_dir, 'Resources', 'References', 'Attachment 2_Auto Parts HTS List.txt'), 'Resources/References'),
-        (os.path.join(tariffmill_dir, 'Resources', 'References', 'parts_master_template.csv'), 'Resources/References'),
-        (os.path.join(tariffmill_dir, 'Resources', 'References', 'tariff_232_import_template.csv'), 'Resources/References'),
         # Templates directory
         (os.path.join(tariffmill_dir, 'templates'), 'templates'),
     ],

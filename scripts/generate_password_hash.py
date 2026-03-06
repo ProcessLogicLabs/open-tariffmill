@@ -2,7 +2,7 @@
 """
 TariffMill Password Hash Generator
 
-This script generates SHA-256 password hashes with salt for the auth_users.json file.
+This script generates PBKDF2-SHA256 password hashes with salt for the auth_users.json file.
 Run this script to create new user credentials.
 
 Usage:
@@ -16,15 +16,18 @@ import secrets
 import getpass
 import json
 
+PBKDF2_ITERATIONS = 600_000
+
 
 def generate_password_hash(password: str) -> dict:
-    """Generate a salted SHA-256 hash for a password.
+    """Generate a salted PBKDF2-SHA256 hash for a password.
 
-    Returns dict with 'password_hash' and 'salt' to add to auth_users.json
+    Uses 600,000 iterations per OWASP 2024 guidance.
     """
     salt = secrets.token_hex(16)
-    salted = f"{salt}{password}".encode('utf-8')
-    password_hash = hashlib.sha256(salted).hexdigest()
+    password_hash = hashlib.pbkdf2_hmac(
+        'sha256', password.encode('utf-8'), salt.encode('utf-8'), PBKDF2_ITERATIONS
+    ).hex()
 
     return {
         'password_hash': password_hash,
@@ -34,8 +37,9 @@ def generate_password_hash(password: str) -> dict:
 
 def verify_password(password: str, stored_hash: str, salt: str) -> bool:
     """Verify a password against stored hash and salt."""
-    salted = f"{salt}{password}".encode('utf-8')
-    computed_hash = hashlib.sha256(salted).hexdigest()
+    computed_hash = hashlib.pbkdf2_hmac(
+        'sha256', password.encode('utf-8'), salt.encode('utf-8'), PBKDF2_ITERATIONS
+    ).hex()
     return computed_hash == stored_hash
 
 

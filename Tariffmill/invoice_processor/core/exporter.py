@@ -214,7 +214,7 @@ def export_to_excel(
                         try:
                             if cell.value:
                                 max_length = max(max_length, len(str(cell.value)))
-                        except:
+                        except (ValueError, TypeError):
                             pass
                     adjusted_width = max(max_length + 2, 8)  # Minimum width of 8
                     ws.column_dimensions[column_letter].width = adjusted_width
@@ -288,7 +288,7 @@ def export_split_by_invoice(
 
     for invoice_num in invoice_numbers:
         invoice_df = df[df[invoice_column] == invoice_num]
-        safe_invoice = str(invoice_num).replace('/', '_').replace('\\', '_')
+        safe_invoice = str(invoice_num).replace('/', '_').replace('\\', '_').replace('..', '_')
         output_path = output_dir / f"{filename_prefix}{safe_invoice}.xlsx"
 
         result = export_to_excel(

@@ -65,9 +65,15 @@ class TariffLookup:
         import sqlite3
 
         try:
+            # Whitelist table name to prevent SQL injection
+            allowed_tables = {'tariff_232', 'tariff_data', 'hts_codes'}
+            if table_name not in allowed_tables:
+                raise ValueError(f"Invalid table name: {table_name}")
             conn = sqlite3.connect(db_path)
-            df = pd.read_sql(f"SELECT hts_code, material, declaration_required FROM {table_name}", conn)
-            conn.close()
+            try:
+                df = pd.read_sql(f"SELECT hts_code, material, declaration_required FROM {table_name}", conn)
+            finally:
+                conn.close()
             return cls(df)
         except Exception as e:
             # Return empty lookup if database read fails

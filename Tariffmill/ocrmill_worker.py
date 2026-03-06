@@ -456,7 +456,7 @@ class ParallelFolderWorker(QThread):
                     self.file_finished.emit(pdf_path.name, False, 0)
                     try:
                         self.processor.move_to_failed(pdf_path, failed_folder, str(e)[:50])
-                    except:
+                    except Exception:
                         pass
 
                 completed += 1

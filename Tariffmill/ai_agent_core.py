@@ -410,7 +410,8 @@ class AgentLoop:
             max_tokens=4096,
             system=self.context.build_system_prompt(),
             tools=self.tool_executor.get_tools_for_api(),
-            messages=self.conversation.get_messages_for_api()
+            messages=self.conversation.get_messages_for_api(),
+            timeout=120.0,
         )
 
 

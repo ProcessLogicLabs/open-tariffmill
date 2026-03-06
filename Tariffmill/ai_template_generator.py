@@ -384,7 +384,7 @@ Generate the complete, working Python template code:
         except ImportError:
             raise ImportError("openai package not installed. Run: pip install openai")
 
-        client = openai.OpenAI(api_key=self.api_key)
+        client = openai.OpenAI(api_key=self.api_key, timeout=120.0)
         response = client.chat.completions.create(
             model=self.model,
             messages=[
@@ -403,7 +403,7 @@ Generate the complete, working Python template code:
         except ImportError:
             raise ImportError("anthropic package not installed. Run: pip install anthropic")
 
-        client = anthropic.Anthropic(api_key=self.api_key)
+        client = anthropic.Anthropic(api_key=self.api_key, timeout=120.0)
         response = client.messages.create(
             model=self.model,
             max_tokens=4000,
@@ -427,7 +427,8 @@ Generate the complete, working Python template code:
             generation_config=genai.types.GenerationConfig(
                 max_output_tokens=4000,
                 temperature=0.3
-            )
+            ),
+            request_options={"timeout": 120}
         )
         return response.text
 
@@ -438,7 +439,7 @@ Generate the complete, working Python template code:
         except ImportError:
             raise ImportError("groq package not installed. Run: pip install groq")
 
-        client = Groq(api_key=self.api_key)
+        client = Groq(api_key=self.api_key, timeout=120.0)
         response = client.chat.completions.create(
             model=self.model,
             messages=[
@@ -740,11 +741,13 @@ class AITemplateGeneratorDialog(QDialog):
             from pathlib import Path
             db_path = Path(__file__).parent / "tariffmill.db"
             conn = sqlite3.connect(str(db_path))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{provider}',))
-            row = c.fetchone()
-            conn.close()
-            return row[0] if row else ""
+            try:
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{provider}',))
+                row = c.fetchone()
+                return row[0] if row else ""
+            finally:
+                conn.close()
         except Exception:
             return ""
 
@@ -2598,12 +2601,20 @@ class AITemplateEditorDialog(QDialog):
             self.syntax_indicator.setStyleSheet("color: #f48771; font-size: 10px;")
 
     def _test_template(self):
-        """Test the template by attempting to import it."""
+        """Test the template by validating syntax and structure (no execution)."""
+        import ast as _ast
         code = self.code_edit.toPlainText()
         try:
-            compile(code, '<template>', 'exec')
-            exec(code, {'__name__': '__main__'})
-            QMessageBox.information(self, "Test Passed", "Template syntax is valid and can be imported!")
+            tree = _ast.parse(code, '<template>')
+            # Verify the template defines at least one class
+            classes = [n for n in _ast.walk(tree) if isinstance(n, _ast.ClassDef)]
+            if not classes:
+                QMessageBox.warning(self, "Test Failed", "No class definition found in template code.")
+                return
+            QMessageBox.information(self, "Test Passed",
+                f"Template syntax is valid.\nFound class(es): {', '.join(c.name for c in classes)}")
+        except SyntaxError as e:
+            QMessageBox.warning(self, "Test Failed", f"Syntax error at line {e.lineno}:\n\n{e.msg}")
         except Exception as e:
             QMessageBox.warning(self, "Test Failed", f"Template has errors:\n\n{e}")
 

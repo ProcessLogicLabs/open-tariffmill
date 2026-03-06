@@ -171,81 +171,82 @@ class OCRMillDatabase:
         """
         with self._lock:
             conn = self._get_connection()
-            cursor = conn.cursor()
+            try:
+                cursor = conn.cursor()
 
-            part_number = part_data.get('part_number')
-            if not part_number:
+                part_number = part_data.get('part_number')
+                if not part_number:
+                    return False
+
+                # Extract description if not provided
+                if not part_data.get('description'):
+                    part_data['description'] = self.description_extractor.extract_description(part_number)
+
+                # Check for FSC certification in description
+                description = part_data.get('description', '')
+                if 'FSC 100%' in description or 'FSC100%' in description.replace(' ', ''):
+                    part_data['fsc_certified'] = 'FSC 100%'
+                    part_data['fsc_certificate_code'] = 'PBN-COC-065387'
+                elif 'FSC' in description.upper():
+                    part_data['fsc_certified'] = 'FSC'
+
+                # Try to find HTS code if not provided
+                if not part_data.get('hts_code'):
+                    hts_code = self.description_extractor.find_hts_from_description(part_data['description'])
+                    if not hts_code:
+                        cursor.execute("SELECT * FROM hts_codes")
+                        hts_database = [dict(row) for row in cursor.fetchall()]
+                        hts_code = self.description_extractor.match_with_hts_database(
+                            part_data['description'], hts_database
+                        )
+                    if hts_code:
+                        part_data['hts_code'] = hts_code
+
+                # Calculate unit price if not provided
+                unit_price = part_data.get('unit_price')
+                if not unit_price and part_data.get('total_price') and part_data.get('quantity'):
+                    try:
+                        unit_price = float(part_data['total_price']) / float(part_data['quantity'])
+                    except (ValueError, ZeroDivisionError):
+                        unit_price = None
+
+                # Insert occurrence
+                cursor.execute("""
+                    INSERT INTO part_occurrences (
+                        part_number, invoice_number, project_number, quantity, total_price, unit_price,
+                        steel_pct, steel_kg, steel_value,
+                        aluminum_pct, aluminum_kg, aluminum_value,
+                        net_weight, ncm_code, hts_code, processed_date, source_file, mid, client_code
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    part_number,
+                    part_data.get('invoice_number'),
+                    part_data.get('project_number'),
+                    part_data.get('quantity'),
+                    part_data.get('total_price'),
+                    unit_price,
+                    part_data.get('steel_pct'),
+                    part_data.get('steel_kg'),
+                    part_data.get('steel_value'),
+                    part_data.get('aluminum_pct'),
+                    part_data.get('aluminum_kg'),
+                    part_data.get('aluminum_value'),
+                    part_data.get('net_weight'),
+                    part_data.get('ncm_code'),
+                    part_data.get('hts_code'),
+                    datetime.now().isoformat(),
+                    part_data.get('source_file'),
+                    part_data.get('mid'),
+                    part_data.get('client_code')
+                ))
+
+                # Update or create part master record
+                self._update_part_master(cursor, part_number, part_data)
+
+                conn.commit()
+                return True
+            finally:
                 conn.close()
-                return False
-
-            # Extract description if not provided
-            if not part_data.get('description'):
-                part_data['description'] = self.description_extractor.extract_description(part_number)
-
-            # Check for FSC certification in description
-            description = part_data.get('description', '')
-            if 'FSC 100%' in description or 'FSC100%' in description.replace(' ', ''):
-                part_data['fsc_certified'] = 'FSC 100%'
-                part_data['fsc_certificate_code'] = 'PBN-COC-065387'
-            elif 'FSC' in description.upper():
-                part_data['fsc_certified'] = 'FSC'
-
-            # Try to find HTS code if not provided
-            if not part_data.get('hts_code'):
-                hts_code = self.description_extractor.find_hts_from_description(part_data['description'])
-                if not hts_code:
-                    cursor.execute("SELECT * FROM hts_codes")
-                    hts_database = [dict(row) for row in cursor.fetchall()]
-                    hts_code = self.description_extractor.match_with_hts_database(
-                        part_data['description'], hts_database
-                    )
-                if hts_code:
-                    part_data['hts_code'] = hts_code
-
-            # Calculate unit price if not provided
-            unit_price = part_data.get('unit_price')
-            if not unit_price and part_data.get('total_price') and part_data.get('quantity'):
-                try:
-                    unit_price = float(part_data['total_price']) / float(part_data['quantity'])
-                except (ValueError, ZeroDivisionError):
-                    unit_price = None
-
-            # Insert occurrence
-            cursor.execute("""
-                INSERT INTO part_occurrences (
-                    part_number, invoice_number, project_number, quantity, total_price, unit_price,
-                    steel_pct, steel_kg, steel_value,
-                    aluminum_pct, aluminum_kg, aluminum_value,
-                    net_weight, ncm_code, hts_code, processed_date, source_file, mid, client_code
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                part_number,
-                part_data.get('invoice_number'),
-                part_data.get('project_number'),
-                part_data.get('quantity'),
-                part_data.get('total_price'),
-                unit_price,
-                part_data.get('steel_pct'),
-                part_data.get('steel_kg'),
-                part_data.get('steel_value'),
-                part_data.get('aluminum_pct'),
-                part_data.get('aluminum_kg'),
-                part_data.get('aluminum_value'),
-                part_data.get('net_weight'),
-                part_data.get('ncm_code'),
-                part_data.get('hts_code'),
-                datetime.now().isoformat(),
-                part_data.get('source_file'),
-                part_data.get('mid'),
-                part_data.get('client_code')
-            ))
-
-            # Update or create part master record
-            self._update_part_master(cursor, part_number, part_data)
-
-            conn.commit()
-            conn.close()
-            return True
 
     def _update_part_master(self, cursor, part_number: str, part_data: Dict):
         """Update the parts_master table with latest occurrence data.

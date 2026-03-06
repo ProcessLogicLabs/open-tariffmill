@@ -7,6 +7,7 @@ import os
 import sys
 import ast
 import json
+import threading
 import traceback
 import difflib
 import tempfile
@@ -37,14 +38,17 @@ class ToolRegistry:
 
     def __init__(self):
         self._context = {}  # Shared context for tools
+        self._context_lock = threading.Lock()
 
     def set_context(self, key: str, value: Any):
-        """Set a context value that tools can access."""
-        self._context[key] = value
+        """Set a context value that tools can access (thread-safe)."""
+        with self._context_lock:
+            self._context[key] = value
 
     def get_context(self, key: str, default: Any = None) -> Any:
-        """Get a context value."""
-        return self._context.get(key, default)
+        """Get a context value (thread-safe)."""
+        with self._context_lock:
+            return self._context.get(key, default)
 
     def create_all_tools(self) -> Dict[str, Dict]:
         """Create all tool definitions and handlers."""
@@ -513,78 +517,76 @@ class ToolRegistry:
             }
 
         try:
-            # Create a temporary module to execute the template
+            # Run template test in a subprocess for sandboxing
+            import subprocess
+
+            # Create temp files for template code and invoice text
             with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
                 f.write(code)
-                temp_path = f.name
+                temp_template_path = f.name
+
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                f.write(invoice_text)
+                temp_invoice_path = f.name
+
+            # Write a test runner script
+            templates_dir = get_templates_dir()
+            test_runner = f'''
+import sys, json
+sys.path.insert(0, {repr(str(templates_dir.parent))})
+sys.path.insert(0, {repr(str(templates_dir))})
+import importlib.util
+spec = importlib.util.spec_from_file_location("test_template", {repr(temp_template_path)})
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+template_class = None
+for name, obj in vars(module).items():
+    if isinstance(obj, type) and name != "BaseTemplate":
+        if hasattr(obj, 'can_process') and hasattr(obj, 'extract_line_items'):
+            template_class = obj
+            break
+if not template_class:
+    print(json.dumps({{"success": False, "error": "No valid template class found"}}))
+    sys.exit(0)
+with open({repr(temp_invoice_path)}, "r", encoding="utf-8") as f:
+    invoice_text = f.read()
+template = template_class()
+can_process = template.can_process(invoice_text)
+invoice_number = template.extract_invoice_number(invoice_text)
+project_number = template.extract_project_number(invoice_text)
+items = template.extract_line_items(invoice_text)
+if hasattr(template, 'post_process_items'):
+    items = template.post_process_items(items)
+print(json.dumps({{
+    "success": True, "can_process": can_process,
+    "invoice_number": invoice_number, "project_number": project_number,
+    "items_count": len(items), "items": items[:20],
+    "items_truncated": len(items) > 20,
+    "template_name": getattr(template, 'name', 'Unknown'),
+    "template_client": getattr(template, 'client', 'Unknown'),
+}}))
+'''
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+                f.write(test_runner)
+                runner_path = f.name
 
             try:
-                # Import the template module
-                spec = importlib.util.spec_from_file_location("test_template", temp_path)
-                module = importlib.util.module_from_spec(spec)
-
-                # Need to add parent imports for BaseTemplate
-                templates_dir = get_templates_dir()
-                if str(templates_dir.parent) not in sys.path:
-                    sys.path.insert(0, str(templates_dir.parent))
-
-                spec.loader.exec_module(module)
-
-                # Find the template class (should inherit from BaseTemplate)
-                template_class = None
-                for name, obj in vars(module).items():
-                    if isinstance(obj, type) and name != "BaseTemplate":
-                        # Check if it has the required methods
-                        if hasattr(obj, 'can_process') and hasattr(obj, 'extract_line_items'):
-                            template_class = obj
-                            break
-
-                if not template_class:
+                result = subprocess.run(
+                    [sys.executable, runner_path],
+                    capture_output=True, text=True, timeout=30,
+                )
+                if result.returncode != 0:
                     return {
                         "success": False,
-                        "error": "No valid template class found in code. Must inherit from BaseTemplate."
+                        "error": result.stderr[:2000] if result.stderr else "Template execution failed"
                     }
-
-                # Instantiate and test
-                template = template_class()
-
-                # Test can_process
-                can_process = template.can_process(invoice_text)
-
-                # Extract data
-                invoice_number = template.extract_invoice_number(invoice_text)
-                project_number = template.extract_project_number(invoice_text)
-
-                # Try table-based extraction if available
-                if invoice_tables and hasattr(template, 'extract_from_tables'):
-                    items = template.extract_from_tables(invoice_tables, invoice_text)
-                    if not items:
-                        items = template.extract_line_items(invoice_text)
-                else:
-                    items = template.extract_line_items(invoice_text)
-
-                # Post-process items if method exists
-                if hasattr(template, 'post_process_items'):
-                    items = template.post_process_items(items)
-
-                return {
-                    "success": True,
-                    "can_process": can_process,
-                    "invoice_number": invoice_number,
-                    "project_number": project_number,
-                    "items_count": len(items),
-                    "items": items[:20],  # Limit to first 20 items
-                    "items_truncated": len(items) > 20,
-                    "template_name": getattr(template, 'name', 'Unknown'),
-                    "template_client": getattr(template, 'client', 'Unknown')
-                }
-
+                return json.loads(result.stdout)
             finally:
-                # Cleanup temp file
-                try:
-                    os.unlink(temp_path)
-                except:
-                    pass
+                for p in (temp_template_path, temp_invoice_path, runner_path):
+                    try:
+                        os.unlink(p)
+                    except Exception:
+                        pass
 
         except Exception as e:
             return {
@@ -673,6 +675,11 @@ class ToolRegistry:
                 "error": "Database connection not available"
             }
 
+        # Whitelist table names to prevent SQL injection
+        allowed_tables = {'parts_master', 'msi_sigma_parts'}
+        if table not in allowed_tables:
+            return {"success": False, "error": f"Table '{table}' is not allowed. Use: {', '.join(allowed_tables)}"}
+
         try:
             cursor = db_connection.cursor()
 
@@ -717,12 +724,39 @@ class ToolRegistry:
                 "traceback": traceback.format_exc()
             }
 
+    def _is_path_allowed(self, file_path: Path) -> bool:
+        """Check if the file path is within allowed directories."""
+        allowed_dirs = [get_templates_dir()]
+        # Allow access to the application's base directory if set in context
+        base_dir = self.get_context("base_dir")
+        if base_dir:
+            allowed_dirs.append(Path(base_dir))
+        # Allow access to input/output directories
+        input_dir = self.get_context("input_dir")
+        output_dir = self.get_context("output_dir")
+        if input_dir:
+            allowed_dirs.append(Path(input_dir))
+        if output_dir:
+            allowed_dirs.append(Path(output_dir))
+
+        resolved = file_path.resolve()
+        return any(
+            resolved == d.resolve() or str(resolved).startswith(str(d.resolve()) + os.sep)
+            for d in allowed_dirs if d
+        )
+
     def _read_file(self, file_path: str, max_lines: int = 500,
                    encoding: str = "utf-8") -> Dict[str, Any]:
         """Read contents of a file from the local filesystem."""
         from datetime import datetime
 
         file_path = Path(file_path)
+
+        if not self._is_path_allowed(file_path):
+            return {
+                "success": False,
+                "error": f"Access denied: path is outside allowed directories"
+            }
 
         if not file_path.exists():
             return {
@@ -837,6 +871,12 @@ class ToolRegistry:
         from datetime import datetime
 
         dir_path = Path(directory_path)
+
+        if not self._is_path_allowed(dir_path):
+            return {
+                "success": False,
+                "error": f"Access denied: path is outside allowed directories"
+            }
 
         if not dir_path.exists():
             return {
