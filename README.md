@@ -41,7 +41,7 @@ TariffMill is a free, open-source desktop application for import/export business
 ### Multi-User Authentication
 - First-run setup wizard creates your admin account on fresh installs
 - Role-based access control (admin, division_admin, user)
-- Windows domain auto-login support
+- Windows domain auto-login with automatic user provisioning — any user on an allowed domain is logged in automatically and added to the user list
 - Admin panel for user management, audit logs, and statistics
 
 ### HTS Database Reference
@@ -264,8 +264,8 @@ No data is sent to AI providers unless you explicitly use the AI Template Genera
 - **First-Run Setup Wizard** — Create your admin account on first launch (no pre-configured users needed)
 - **User Management Panel** — Add, edit, delete, suspend, and reset passwords for users directly from the Admin Panel (Ctrl+Shift+A)
 - **Role-Based Access** — Admin, division admin, and user roles with appropriate permissions
-- **Windows Domain Auth** — Auto-login support for Windows domain environments
-- **Removed Billing System** — All proprietary billing and email/SMTP functions removed
+- **Windows Domain Auth** — Auto-login with automatic user provisioning for allowed domains — no need to pre-register each domain user
+- **Shared Templates** — Network folder support for sharing PDF extraction templates across users
 - **Settings Migration** — Domain and template settings migrated to the app_config table
 - **Production Hardening** — Debug print statements replaced with proper logging
 

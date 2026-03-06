@@ -161,6 +161,8 @@ The email field remembers your last login for convenience.
 
 If your administrator has configured Windows domain authentication, TariffMill will automatically log you in using your Windows credentials. No login dialog is shown.
 
+If this is your first time launching TariffMill on an allowed domain, your account is **created automatically** with a standard "user" role. Your administrator can see your account in the Admin Panel and adjust your role or permissions as needed.
+
 ### Signing Out
 
 Go to **Session** > **Sign Out** to log out and return to the login screen.

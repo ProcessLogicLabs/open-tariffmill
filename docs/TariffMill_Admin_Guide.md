@@ -219,9 +219,10 @@ The **AI Assistant** checkbox controls access to the AI Templates tab.
 1. Load auth_users.json
 2. No users exist? -> First-Run Setup Wizard
 3. Users exist? -> Try Windows domain auto-login
-   a. Domain match + user found -> Auto-login
-   b. Failed -> Show Login Dialog
-4. Verify password hash -> Grant access with role
+   a. Domain in allowed list + user found -> Auto-login
+   b. Domain in allowed list + user NOT found -> Auto-provision as 'user' role, then auto-login
+   c. Domain not allowed or not on domain -> Show Login Dialog
+4. Login Dialog -> Verify password hash -> Grant access with role
 ```
 
 ### File Search Locations (Priority Order)
@@ -236,27 +237,56 @@ The **AI Assistant** checkbox controls access to the AI Templates tab.
 
 ## 7. Windows Domain Authentication
 
+### How It Works
+
+Windows domain authentication uses the `USERDOMAIN` and `USERNAME` environment variables provided by the Windows operating system. When a user is logged into a domain that TariffMill trusts, they are authenticated automatically — no password prompt, no login dialog.
+
+**New domain users are auto-provisioned:** When a user on an allowed domain launches TariffMill for the first time, their account is created automatically with the "user" role. The admin can then adjust roles, grant AI access, or suspend accounts as needed from the Admin Panel.
+
 ### Configuration
 
-**Step 1:** Set allowed domains (comma-separated, case-insensitive):
+**Step 1:** Set allowed domains in the Admin Panel (`Ctrl+Shift+A`) > Settings, or via:
 
-Configure in Admin Panel or via `set_app_setting('allowed_domains', 'CORPORATE,BRANCH_OFFICE')`.
+```python
+set_app_setting('allowed_domains', 'CORPORATE,BRANCH_OFFICE')
+```
 
-**Step 2:** Create Windows user entries in `auth_users.json`:
+Comma-separated, case-insensitive. Example: `MYCORP,BRANCH1,BRANCH2`
+
+**Step 2:** That's it. Any user on an allowed domain will auto-login on next launch.
+
+### What Happens on First Login
+
+1. User launches TariffMill on a machine joined to `MYCORP` domain
+2. TariffMill reads `USERDOMAIN=MYCORP` and `USERNAME=jsmith` from the OS
+3. Checks if `MYCORP` is in the allowed domains list
+4. User `MYCORP\jsmith` not found in user list → **auto-provisions** with role `user`
+5. Saves new entry to `auth_users.json`
+6. User is logged in automatically
+
+### Auto-Provisioned User Entry
+
+Auto-provisioned users are saved with the following data:
 
 ```json
 {
-    "CORPORATE\\jdoe": {
+    "MYCORP\\jsmith": {
         "role": "user",
-        "name": "Jane Doe",
-        "auth_type": "windows"
+        "name": "Jsmith",
+        "auth_type": "windows",
+        "auto_provisioned": true,
+        "created": "2026-03-06T12:00:00"
     }
 }
 ```
 
-Key format: `DOMAIN\username` — domain uppercase, username lowercase.
+### Managing Domain Users
 
-**Step 3:** When a user on the allowed domain launches TariffMill, auto-login occurs if their entry exists and the account is not suspended.
+After auto-provisioning, admins can:
+- **Promote** a user to `admin` or `division_admin` via the User Management tab
+- **Grant AI access** by checking the AI Assistant checkbox
+- **Suspend** a user to block future logins (they see "Your account has been suspended")
+- **Pre-create** users manually via Add User > Windows Domain User if you want to assign roles before their first login
 
 ---
 
@@ -471,7 +501,7 @@ All export attempts logged in `export_audit_log` with user identity, machine ID,
 |---------|----------|
 | First-run wizard doesn't appear | Clear `users` in auth_users.json |
 | "Account suspended" | Admin unsuspends via Admin Panel |
-| Windows auto-login fails | Add domain to allowed_domains and create user entry |
+| Windows auto-login fails | Verify domain is in allowed_domains (Admin Panel > Settings). Users are auto-provisioned — no manual user entry needed. Check logs for details. |
 | Empty user list | Place auth_users.json in installation directory |
 
 ### Database Issues
