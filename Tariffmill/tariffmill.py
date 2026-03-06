@@ -10633,32 +10633,47 @@ class TariffMill(QMainWindow):
                 wt = int(round(row['CalcWtNet']))
                 return str(max(wt, 1))  # Minimum 1 KG
 
-            # Count-only units: Qty1 is piece count from invoice
+            # Count-only units: Qty1 is quantity converted to the HTS reporting unit
+            # Per 19 CFR § 141.89, quantities must be reported in the unit specified by the HTS
             if qty_unit in COUNT_UNITS:
                 qty = row.get('quantity', '')
                 if pd.notna(qty) and str(qty).strip():
                     try:
-                        return str(int(float(str(qty).replace(',', '').strip())))
+                        raw_qty = float(str(qty).replace(',', '').strip())
+                        # Convert pieces to the HTS reporting unit
+                        if qty_unit == 'GROSS':
+                            converted = raw_qty / 144.0
+                        elif qty_unit in ('DOZ', 'DOZ. PRS', 'DZ PCS'):
+                            converted = raw_qty / 12.0
+                        elif qty_unit == 'HUNDREDS':
+                            converted = raw_qty / 100.0
+                        elif qty_unit == 'THOUSANDS':
+                            converted = raw_qty / 1000.0
+                        elif qty_unit == 'PRS':
+                            converted = raw_qty / 2.0
+                        else:
+                            # NO, PCS, PACK, DOSES, CARAT - report as-is
+                            converted = raw_qty
+                        return str(max(int(round(converted)), 1))  # Minimum 1, rounded
                     except (ValueError, TypeError):
                         return ''
                 return ''
 
-            # Dual units: Qty1 is piece count
+            # Dual units: Qty1 is count converted to the HTS reporting unit
             if qty_unit in DUAL_UNITS:
                 qty = row.get('quantity', '')
                 if pd.notna(qty) and str(qty).strip():
                     try:
                         qty_val = float(str(qty).replace(',', '').strip())
-                        # Preserve 2 decimal places for dozen-based units (DOZ., KG etc.)
+                        # Convert pieces to the HTS count unit (first part of dual unit)
                         if 'DOZ' in qty_unit:
-                            return f"{qty_val:.2f}"
-                        # For NO-based units, if qty appears to be in dozens (< 100 and has decimals),
-                        # it may need conversion. Check quantity_unit from invoice to determine.
-                        qty_unit_invoice = str(row.get('quantity_unit', '')).strip().upper()
-                        if 'NO' in qty_unit and qty_unit_invoice == 'DOZ':
-                            # Invoice reported in dozens, convert to pieces
-                            qty_val = qty_val * 12
-                        result = max(int(qty_val), 1)  # Minimum 1 piece
+                            # DOZ., KG / DOZ. KG / DOZ KG — convert pieces to dozens
+                            converted = qty_val / 12.0
+                            return f"{max(converted, 0.01):.2f}"
+                        if 'PRS' in qty_unit:
+                            # PRS., KG / PRS. KG — convert pieces to pairs
+                            qty_val = qty_val / 2.0
+                        result = max(int(round(qty_val)), 1)  # Minimum 1
                         return str(result)
                     except (ValueError, TypeError):
                         return ''
