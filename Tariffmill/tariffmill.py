@@ -2161,7 +2161,7 @@ def init_database():
                                 c.execute("UPDATE mapping_profiles SET mapping_json = ? WHERE profile_name = ?",
                                          (json.dumps(data), profile_name))
                                 updated += 1
-                        except:
+                        except Exception:
                             pass
                 if updated > 0:
                     logger.info(f"Updated {updated} output mapping profiles: CalcWtNet->Qty1, Pcs->Qty2")
@@ -2215,7 +2215,7 @@ def init_database():
                                 c.execute("UPDATE output_column_mappings SET mapping_json = ? WHERE profile_name = ?",
                                          (json.dumps(data), profile_name))
                                 updated += 1
-                        except:
+                        except Exception:
                             pass
                 if updated > 0:
                     logger.info(f"Updated {updated} output_column_mappings profiles: CalcWtNet->Qty1, Pcs->Qty2")
@@ -2390,7 +2390,7 @@ def init_database():
                                     VALUES (?, ?, ?, ?, ?, ?, ?)""", tariff)
                         if c.rowcount > 0:
                             inserted += 1
-                    except:
+                    except Exception:
                         pass
 
                 logger.info(f"Migration: Added {inserted} Section 232 Automotive tariff codes")
@@ -2421,7 +2421,7 @@ def init_database():
                                              (hts_code, qty_unit))
                                     if c.rowcount > 0:
                                         inserted += 1
-                                except:
+                                except Exception:
                                     pass
                         logger.info(f"Migration: Imported {inserted} HTS unit codes from HTS_qty1.xlsx")
                     except Exception as e:
@@ -3763,7 +3763,7 @@ class TariffMill(QMainWindow):
             conn.close()
             if row:
                 self.output_font_color = row[0]
-        except:
+        except Exception:
             pass
 
         central = QWidget()
@@ -6373,7 +6373,7 @@ class TariffMill(QMainWindow):
                 conn.close()
                 if row:
                     checkbox.setChecked(row[0] == '1')
-            except:
+            except Exception:
                 pass
 
             # Save preference and apply when changed
@@ -9827,7 +9827,7 @@ class TariffMill(QMainWindow):
             user_text = self.ci_input.text().replace(',', '').strip()
             try:
                 user_val = float(user_text) if user_text else 0.0
-            except:
+            except (ValueError, TypeError):
                 user_val = 0.0
 
             diff = abs(user_val - self.csv_total_value)
@@ -10032,7 +10032,7 @@ class TariffMill(QMainWindow):
             wt_val = float(wt_text.replace(',', ''))
             if wt_val <= 0:
                 raise ValueError()
-        except:
+        except (ValueError, TypeError):
             self.wt_input.setStyleSheet("border: 2px solid #ff4444; background-color: #ffebee;")
             QTimer.singleShot(1200, lambda: self.wt_input.setStyleSheet(""))
             self.wt_input.setFocus()
@@ -10084,7 +10084,7 @@ class TariffMill(QMainWindow):
                 if pd.isna(text) or text == "": return 0.0
                 try:
                     return float(str(text).replace(',', '').strip())
-                except:
+                except (ValueError, TypeError):
                     return 0.0
             df['value_usd'] = pd.to_numeric(df['value_usd'], errors='coerce').fillna(0)
             csv_total = df['value_usd'].sum()
@@ -10890,7 +10890,7 @@ class TariffMill(QMainWindow):
                         new_val = float(clean_val)
                         self.editable_invoice_df.at[row, 'value_usd'] = new_val
                         updated += 1
-                    except:
+                    except (ValueError, TypeError):
                         self.editable_invoice_df.at[row, 'value_usd'] = 0.0
 
             # Save back to original file
@@ -11508,7 +11508,7 @@ class TariffMill(QMainWindow):
                                 pct *= 100.0
                             return max(0.0, pct)
                         return 0.0
-                    except:
+                    except (ValueError, TypeError):
                         return 0.0
 
                 steel_val = parse_percentage_val(str(r.get('steel_pct', r.get('Sec 232 Content Ratio', r.get('Steel %', '')))).strip())
@@ -11591,7 +11591,7 @@ class TariffMill(QMainWindow):
                                 pct *= 100.0
                             return max(0.0, min(100.0, pct))
                         return 0.0
-                    except:
+                    except (ValueError, TypeError):
                         return 0.0
 
                 # Parse all percentage fields
@@ -12221,7 +12221,7 @@ class TariffMill(QMainWindow):
                 conn.close()
                 if row:
                     is_visible = row[0] == 'True'
-            except:
+            except Exception:
                 pass
 
             checkbox = QCheckBox(col.replace('Ratio', '%'))
@@ -12247,7 +12247,7 @@ class TariffMill(QMainWindow):
             conn.close()
             if row:
                 self.split_by_invoice = row[0] == 'True'
-        except:
+        except Exception:
             pass
 
         self.split_by_invoice_checkbox = QCheckBox("Split by Invoice Number")
@@ -13378,7 +13378,7 @@ class TariffMill(QMainWindow):
                 import platform
                 machine_info = f"{platform.node()}-{platform.machine()}"
                 machine_id = hashlib.md5(machine_info.encode()).hexdigest()[:12]
-            except:
+            except Exception:
                 pass
 
             # Try to get IP address
@@ -13386,7 +13386,7 @@ class TariffMill(QMainWindow):
             try:
                 import socket
                 ip_address = socket.gethostbyname(socket.gethostname())
-            except:
+            except Exception:
                 pass
 
             conn = sqlite3.connect(str(DB_PATH))
@@ -13468,7 +13468,7 @@ class TariffMill(QMainWindow):
             conn.close()
             if row and row[0]:
                 return row[0]
-        except:
+        except Exception:
             pass
         return default
 
@@ -14361,7 +14361,7 @@ class TariffMill(QMainWindow):
             divisions = self._get_divisions()
             for div_id, name, prefix, length in divisions:
                 divisions_map[div_id] = name
-        except:
+        except Exception:
             pass
 
         for user_key, data in users.items():
@@ -18732,7 +18732,7 @@ Please fix this error in the template code. Return the complete corrected templa
                 try:
                     importlib.import_module(package_name)
                     return True
-                except:
+                except Exception:
                     # Package installed but can't be imported - may need app restart
                     logger.info(f"Package {package_name} is installed but requires app restart to use")
                     return True  # Return True since it IS installed
@@ -20217,7 +20217,7 @@ Please fix this error in the template code. Return the complete corrected templa
                         info['ai_agent'] = metadata.get('provider', '')
                         if metadata.get('model'):
                             info['ai_agent'] += f" ({metadata.get('model')})"
-                except:
+                except Exception:
                     info['ai_agent'] = 'AI'
 
             return info
@@ -21093,27 +21093,27 @@ Please fix this error in the template code. Return the complete corrected templa
             try:
                 steel = float(items[6].text()) if items[6] and items[6].text() else 0.0
                 steel = max(0.0, min(100.0, steel))
-            except:
+            except (ValueError, TypeError):
                 steel = 0.0
             try:
                 aluminum = float(items[7].text()) if items[7] and items[7].text() else 0.0
                 aluminum = max(0.0, min(100.0, aluminum))
-            except:
+            except (ValueError, TypeError):
                 aluminum = 0.0
             try:
                 copper = float(items[8].text()) if items[8] and items[8].text() else 0.0
                 copper = max(0.0, min(100.0, copper))
-            except:
+            except (ValueError, TypeError):
                 copper = 0.0
             try:
                 wood = float(items[9].text()) if items[9] and items[9].text() else 0.0
                 wood = max(0.0, min(100.0, wood))
-            except:
+            except (ValueError, TypeError):
                 wood = 0.0
             try:
                 auto = float(items[10].text()) if items[10] and items[10].text() else 0.0
                 auto = max(0.0, min(100.0, auto))
-            except:
+            except (ValueError, TypeError):
                 auto = 0.0
 
             non_steel = max(0.0, 100.0 - steel - aluminum - copper - wood - auto)
@@ -21196,27 +21196,27 @@ Please fix this error in the template code. Return the complete corrected templa
                 try:
                     steel = float(items[6].text()) if items[6] and items[6].text() else 0.0
                     steel = max(0.0, min(100.0, steel))
-                except:
+                except (ValueError, TypeError):
                     steel = 0.0
                 try:
                     aluminum = float(items[7].text()) if items[7] and items[7].text() else 0.0
                     aluminum = max(0.0, min(100.0, aluminum))
-                except:
+                except (ValueError, TypeError):
                     aluminum = 0.0
                 try:
                     copper = float(items[8].text()) if items[8] and items[8].text() else 0.0
                     copper = max(0.0, min(100.0, copper))
-                except:
+                except (ValueError, TypeError):
                     copper = 0.0
                 try:
                     wood = float(items[9].text()) if items[9] and items[9].text() else 0.0
                     wood = max(0.0, min(100.0, wood))
-                except:
+                except (ValueError, TypeError):
                     wood = 0.0
                 try:
                     auto = float(items[10].text()) if items[10] and items[10].text() else 0.0
                     auto = max(0.0, min(100.0, auto))
-                except:
+                except (ValueError, TypeError):
                     auto = 0.0
                 # Non-232 percentage is remainder after all Section 232 materials
                 non_steel = max(0.0, 100.0 - steel - aluminum - copper - wood - auto)
@@ -21458,7 +21458,7 @@ Please fix this error in the template code. Return the complete corrected templa
             value_usd = row.get('ValueUSD', row.get('value_usd', 0))
             try:
                 value_display = f"${float(value_usd):,.2f}"
-            except:
+            except (ValueError, TypeError):
                 value_display = str(value_usd)
 
             # Determine status
@@ -24353,7 +24353,7 @@ Please fix this error in the template code. Return the complete corrected templa
         ci_text = self.ci_input.text().replace(',', '').strip()
         try:
             target_value = float(ci_text) if ci_text else self.csv_total_value
-        except:
+        except (ValueError, TypeError):
             target_value = self.csv_total_value
 
         diff = abs(total - target_value)
@@ -24718,7 +24718,7 @@ Please fix this error in the template code. Return the complete corrected templa
                         try:
                             if cell.value:
                                 max_length = max(max_length, len(str(cell.value)))
-                        except:
+                        except Exception:
                             pass
                     adjusted_width = max_length + 2
                     ws.column_dimensions[column_letter].width = adjusted_width
@@ -24761,9 +24761,9 @@ Please fix this error in the template code. Return the complete corrected templa
         ci_text = self.ci_input.text().replace(',', '').strip()
         try:
             target_value = float(ci_text)
-        except:
+        except (ValueError, TypeError):
             target_value = self.csv_total_value
-        
+
         if abs(running_total - target_value) > 0.05:
             self.log_export_audit(
                 event_type="EXPORT_BLOCKED_TOTALS_MISMATCH",
@@ -24933,7 +24933,7 @@ Please fix this error in the template code. Return the complete corrected templa
                     conn.close()
                     if row:
                         is_visible = row[0] == 'True'
-                except:
+                except Exception:
                     pass
                 if is_visible:
                     cols.append(col)
@@ -24974,7 +24974,7 @@ Please fix this error in the template code. Return the complete corrected templa
             conn.close()
             if row:
                 split_by_invoice = row[0] == 'True'
-        except:
+        except Exception:
             pass
 
         # Get unique invoice numbers if splitting is enabled
@@ -25300,7 +25300,7 @@ Please fix this error in the template code. Return the complete corrected templa
                             try:
                                 if cell.value:
                                     max_length = max(max_length, len(str(cell.value)))
-                            except:
+                            except Exception:
                                 pass
 
                         # Add padding (2 extra characters) and set column width
@@ -26296,7 +26296,7 @@ Please fix this error in the template code. Return the complete corrected templa
 
             # Always refresh - directory mtime is unreliable on network drives
             self.refresh_input_files()
-        except:
+        except Exception:
             pass  # Silently ignore errors during auto-refresh
 
     def refresh_exported_files_light(self):
@@ -26311,7 +26311,7 @@ Please fix this error in the template code. Return the complete corrected templa
 
             # Always refresh - directory mtime is unreliable on network drives
             self.refresh_exported_files()
-        except:
+        except Exception:
             pass  # Silently ignore errors during auto-refresh
 
     def ocrmill_refresh_input_files_light(self):
@@ -26330,7 +26330,7 @@ Please fix this error in the template code. Return the complete corrected templa
 
             # Always refresh - directory mtime is unreliable on network drives
             self.ocrmill_refresh_input_files()
-        except:
+        except Exception:
             pass  # Silently ignore errors during auto-refresh
 
     def ocrmill_refresh_output_files_light(self):
@@ -26349,7 +26349,7 @@ Please fix this error in the template code. Return the complete corrected templa
 
             # Always refresh - directory mtime is unreliable on network drives
             self.ocrmill_refresh_output_files()
-        except:
+        except Exception:
             pass  # Silently ignore errors during auto-refresh
 
     def cleanup_old_exports(self):

@@ -371,19 +371,19 @@ class ToolRegistry:
                         try:
                             val = line.split('=', 1)[1].strip().strip('"\'')
                             metadata["description"] = val
-                        except:
+                        except (IndexError, ValueError):
                             pass
                     elif 'client' in line and '=' in line and 'str' not in line:
                         try:
                             val = line.split('=', 1)[1].strip().strip('"\'')
                             metadata["client"] = val
-                        except:
+                        except (IndexError, ValueError):
                             pass
                     elif 'enabled' in line and '=' in line:
                         metadata["enabled"] = 'True' in line or 'true' in line
 
                 templates.append(metadata)
-            except:
+            except Exception:
                 templates.append({
                     "name": name,
                     "file_name": f"{name}.py",
@@ -652,7 +652,7 @@ print(json.dumps({{
                     "text": "\n\n".join(selected_text),
                     "character_count": sum(len(t) for t in selected_text)
                 }
-            except:
+            except Exception:
                 pass  # Fall through to return all text
 
         return {

@@ -43,7 +43,7 @@ class UpdateChecker(QThread):
         # Determine major version to filter releases (0 = standard, 1 = enterprise)
         try:
             self.major_version = int(self.current_version.split('.')[0])
-        except:
+        except (ValueError, IndexError):
             self.major_version = 0  # Default to standard edition
 
     def run(self):
@@ -72,7 +72,7 @@ class UpdateChecker(QThread):
                     release_major = int(tag.split('.')[0])
                     if release_major == self.major_version:
                         compatible_releases.append(release)
-                except:
+                except (ValueError, IndexError):
                     continue  # Skip releases with invalid version format
 
             if not compatible_releases:
@@ -136,7 +136,7 @@ class UpdateChecker(QThread):
             current_parts += [0] * (max_len - len(current_parts))
 
             return latest_parts > current_parts
-        except:
+        except (ValueError, IndexError):
             return False
 
 

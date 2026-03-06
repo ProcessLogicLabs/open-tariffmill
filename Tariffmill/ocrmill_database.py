@@ -319,46 +319,47 @@ class OCRMillDatabase:
     def search_parts(self, search_term: str) -> List[Dict]:
         """Search parts by part number or description."""
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM parts_master
-            WHERE part_number LIKE ? OR description LIKE ?
-            ORDER BY part_number
-        """, (f'%{search_term}%', f'%{search_term}%'))
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM parts_master
+                WHERE part_number LIKE ? OR description LIKE ?
+                ORDER BY part_number
+            """, (f'%{search_term}%', f'%{search_term}%'))
+            results = [dict(row) for row in cursor.fetchall()]
+            return results
+        finally:
+            conn.close()
 
     def find_hts_code(self, part_number: str, description: str = "") -> Optional[str]:
         """Find HTS code for a part using fuzzy matching."""
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        # First check if part already has HTS code in parts_master
-        cursor.execute("SELECT hts_code FROM parts_master WHERE part_number = ? AND hts_code IS NOT NULL", (part_number,))
-        result = cursor.fetchone()
-        if result and result['hts_code']:
+            # First check if part already has HTS code in parts_master
+            cursor.execute("SELECT hts_code FROM parts_master WHERE part_number = ? AND hts_code IS NOT NULL", (part_number,))
+            result = cursor.fetchone()
+            if result and result['hts_code']:
+                return result['hts_code']
+
+            # Try to match based on description keywords
+            if description:
+                keywords = description.upper().split()
+                for keyword in keywords:
+                    if len(keyword) > 3:
+                        cursor.execute("""
+                            SELECT hts_code, description
+                            FROM hts_codes
+                            WHERE UPPER(description) LIKE ?
+                            ORDER BY LENGTH(description)
+                            LIMIT 1
+                        """, (f'%{keyword}%',))
+                        result = cursor.fetchone()
+                        if result:
+                            return result['hts_code']
+        finally:
             conn.close()
-            return result['hts_code']
-
-        # Try to match based on description keywords
-        if description:
-            keywords = description.upper().split()
-            for keyword in keywords:
-                if len(keyword) > 3:
-                    cursor.execute("""
-                        SELECT hts_code, description
-                        FROM hts_codes
-                        WHERE UPPER(description) LIKE ?
-                        ORDER BY LENGTH(description)
-                        LIMIT 1
-                    """, (f'%{keyword}%',))
-                    result = cursor.fetchone()
-                    if result:
-                        conn.close()
-                        return result['hts_code']
-
-        conn.close()
 
         # Use description extractor as fallback
         return self.description_extractor.find_hts_from_description(description)
@@ -368,30 +369,32 @@ class OCRMillDatabase:
         try:
             df = pd.read_excel(xlsx_path)
             conn = self._get_connection()
-            cursor = conn.cursor()
+            try:
+                cursor = conn.cursor()
 
-            seen_hts = set()
+                seen_hts = set()
 
-            for _, row in df.iterrows():
-                hts_code = str(row.get('HTS', row.get('hts_code', '')))
-                if hts_code in seen_hts or not hts_code:
-                    continue
+                for _, row in df.iterrows():
+                    hts_code = str(row.get('HTS', row.get('hts_code', '')))
+                    if hts_code in seen_hts or not hts_code:
+                        continue
 
-                seen_hts.add(hts_code)
+                    seen_hts.add(hts_code)
 
-                cursor.execute("""
-                    INSERT OR REPLACE INTO hts_codes (hts_code, description, suggested, last_updated)
-                    VALUES (?, ?, ?, ?)
-                """, (
-                    hts_code,
-                    str(row.get('DESCRIPTION', row.get('description', ''))),
-                    str(row.get('SUGGESTED', row.get('suggested', ''))),
-                    datetime.now().isoformat()
-                ))
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO hts_codes (hts_code, description, suggested, last_updated)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        hts_code,
+                        str(row.get('DESCRIPTION', row.get('description', ''))),
+                        str(row.get('SUGGESTED', row.get('suggested', ''))),
+                        datetime.now().isoformat()
+                    ))
 
-            conn.commit()
-            conn.close()
-            return True
+                conn.commit()
+                return True
+            finally:
+                conn.close()
         except Exception as e:
             print(f"Error loading HTS mapping: {e}")
             return False
@@ -411,23 +414,23 @@ class OCRMillDatabase:
         normalized_search = normalize(company_name)
 
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM mid_table")
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM mid_table")
 
-        candidates = []
-        for row in cursor.fetchall():
-            db_name = row['manufacturer_name'] or ''
-            normalized_db = normalize(db_name)
+            candidates = []
+            for row in cursor.fetchall():
+                db_name = row['manufacturer_name'] or ''
+                normalized_db = normalize(db_name)
 
-            if normalized_db == normalized_search:
-                conn.close()
-                return dict(row)
+                if normalized_db == normalized_search:
+                    return dict(row)
 
-            if normalized_search in normalized_db or normalized_db in normalized_search:
-                score = min(len(normalized_search), len(normalized_db)) / max(len(normalized_search), len(normalized_db))
-                candidates.append((score, row))
-
-        conn.close()
+                if normalized_search in normalized_db or normalized_db in normalized_search:
+                    score = min(len(normalized_search), len(normalized_db)) / max(len(normalized_search), len(normalized_db))
+                    candidates.append((score, row))
+        finally:
+            conn.close()
 
         if candidates:
             candidates.sort(key=lambda x: x[0], reverse=True)
@@ -438,47 +441,51 @@ class OCRMillDatabase:
     def get_manufacturer_by_mid(self, mid: str) -> Optional[Dict]:
         """Get manufacturer by MID from mid_table."""
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM mid_table WHERE mid = ?", (mid,))
-        result = cursor.fetchone()
-        conn.close()
-        return dict(result) if result else None
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM mid_table WHERE mid = ?", (mid,))
+            result = cursor.fetchone()
+            return dict(result) if result else None
+        finally:
+            conn.close()
 
     def ensure_template_stats_table(self):
         """Create the template_stats table if it doesn't exist."""
         with self._lock:
             conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS template_stats (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    template_name TEXT NOT NULL,
-                    pdf_file TEXT,
-                    items_extracted INTEGER DEFAULT 0,
-                    confidence_score REAL,
-                    processing_time_ms INTEGER,
-                    success INTEGER DEFAULT 1,
-                    error_message TEXT,
-                    processed_date TEXT NOT NULL,
-                    username TEXT
-                )
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_template_stats_name ON template_stats(template_name)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_template_stats_date ON template_stats(processed_date)
-            """)
-            cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_template_stats_user ON template_stats(username)
-            """)
-            # Add username column if it doesn't exist (for migration from older versions)
             try:
-                cursor.execute("ALTER TABLE template_stats ADD COLUMN username TEXT")
-            except sqlite3.OperationalError:
-                pass  # Column already exists
-            conn.commit()
-            conn.close()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS template_stats (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        template_name TEXT NOT NULL,
+                        pdf_file TEXT,
+                        items_extracted INTEGER DEFAULT 0,
+                        confidence_score REAL,
+                        processing_time_ms INTEGER,
+                        success INTEGER DEFAULT 1,
+                        error_message TEXT,
+                        processed_date TEXT NOT NULL,
+                        username TEXT
+                    )
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_template_stats_name ON template_stats(template_name)
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_template_stats_date ON template_stats(processed_date)
+                """)
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_template_stats_user ON template_stats(username)
+                """)
+                # Add username column if it doesn't exist (for migration from older versions)
+                try:
+                    cursor.execute("ALTER TABLE template_stats ADD COLUMN username TEXT")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+                conn.commit()
+            finally:
+                conn.close()
 
     def record_template_usage(self, template_name: str, pdf_file: str = None,
                               items_extracted: int = 0, confidence_score: float = None,
@@ -488,217 +495,232 @@ class OCRMillDatabase:
         self.ensure_template_stats_table()
         with self._lock:
             conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO template_stats (
-                    template_name, pdf_file, items_extracted, confidence_score,
-                    processing_time_ms, success, error_message, processed_date, username
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                template_name,
-                pdf_file,
-                items_extracted,
-                confidence_score,
-                processing_time_ms,
-                1 if success else 0,
-                error_message,
-                datetime.now().isoformat(),
-                username
-            ))
-            conn.commit()
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO template_stats (
+                        template_name, pdf_file, items_extracted, confidence_score,
+                        processing_time_ms, success, error_message, processed_date, username
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    template_name,
+                    pdf_file,
+                    items_extracted,
+                    confidence_score,
+                    processing_time_ms,
+                    1 if success else 0,
+                    error_message,
+                    datetime.now().isoformat(),
+                    username
+                ))
+                conn.commit()
+            finally:
+                conn.close()
 
     def get_template_statistics(self) -> List[Dict]:
         """Get aggregated template usage statistics."""
         self.ensure_template_stats_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                template_name,
-                COUNT(*) as total_uses,
-                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_uses,
-                SUM(items_extracted) as total_items,
-                ROUND(AVG(confidence_score), 2) as avg_confidence,
-                ROUND(AVG(processing_time_ms), 0) as avg_time_ms,
-                MAX(processed_date) as last_used
-            FROM template_stats
-            GROUP BY template_name
-            ORDER BY total_uses DESC
-        """)
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    template_name,
+                    COUNT(*) as total_uses,
+                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful_uses,
+                    SUM(items_extracted) as total_items,
+                    ROUND(AVG(confidence_score), 2) as avg_confidence,
+                    ROUND(AVG(processing_time_ms), 0) as avg_time_ms,
+                    MAX(processed_date) as last_used
+                FROM template_stats
+                GROUP BY template_name
+                ORDER BY total_uses DESC
+            """)
+            results = [dict(row) for row in cursor.fetchall()]
+            return results
+        finally:
+            conn.close()
 
     def get_template_usage_history(self, template_name: str, limit: int = 50) -> List[Dict]:
         """Get recent usage history for a specific template."""
         self.ensure_template_stats_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM template_stats
-            WHERE template_name = ?
-            ORDER BY processed_date DESC
-            LIMIT ?
-        """, (template_name, limit))
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM template_stats
+                WHERE template_name = ?
+                ORDER BY processed_date DESC
+                LIMIT ?
+            """, (template_name, limit))
+            results = [dict(row) for row in cursor.fetchall()]
+            return results
+        finally:
+            conn.close()
 
     def get_processing_stats_summary(self) -> Dict:
         """Get overall processing statistics summary."""
         self.ensure_template_stats_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        # Overall stats
-        cursor.execute("""
-            SELECT
-                COUNT(*) as total_processed,
-                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
-                SUM(items_extracted) as total_items,
-                COUNT(DISTINCT template_name) as templates_used,
-                ROUND(AVG(confidence_score), 2) as avg_confidence
-            FROM template_stats
-        """)
-        overall = dict(cursor.fetchone())
+            # Overall stats
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_processed,
+                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
+                    SUM(items_extracted) as total_items,
+                    COUNT(DISTINCT template_name) as templates_used,
+                    ROUND(AVG(confidence_score), 2) as avg_confidence
+                FROM template_stats
+            """)
+            overall = dict(cursor.fetchone())
 
-        # Today's stats
-        today = datetime.now().strftime('%Y-%m-%d')
-        cursor.execute("""
-            SELECT
-                COUNT(*) as processed_today,
-                SUM(items_extracted) as items_today
-            FROM template_stats
-            WHERE processed_date LIKE ?
-        """, (f'{today}%',))
-        today_stats = dict(cursor.fetchone())
+            # Today's stats
+            today = datetime.now().strftime('%Y-%m-%d')
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as processed_today,
+                    SUM(items_extracted) as items_today
+                FROM template_stats
+                WHERE processed_date LIKE ?
+            """, (f'{today}%',))
+            today_stats = dict(cursor.fetchone())
 
-        # This week's stats
-        cursor.execute("""
-            SELECT
-                COUNT(*) as processed_week,
-                SUM(items_extracted) as items_week
-            FROM template_stats
-            WHERE processed_date >= date('now', '-7 days')
-        """)
-        week_stats = dict(cursor.fetchone())
+            # This week's stats
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as processed_week,
+                    SUM(items_extracted) as items_week
+                FROM template_stats
+                WHERE processed_date >= date('now', '-7 days')
+            """)
+            week_stats = dict(cursor.fetchone())
 
-        conn.close()
-
-        return {
-            **overall,
-            **today_stats,
-            **week_stats
-        }
+            return {
+                **overall,
+                **today_stats,
+                **week_stats
+            }
+        finally:
+            conn.close()
 
     def get_user_statistics(self) -> List[Dict]:
         """Get aggregated statistics by user for admin dashboard."""
         self.ensure_template_stats_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                COALESCE(username, 'Unknown') as username,
-                COUNT(*) as total_processed,
-                SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
-                SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed,
-                SUM(items_extracted) as total_items,
-                ROUND(AVG(confidence_score), 2) as avg_confidence,
-                ROUND(AVG(processing_time_ms), 0) as avg_time_ms,
-                MAX(processed_date) as last_activity,
-                COUNT(DISTINCT template_name) as templates_used,
-                COUNT(DISTINCT DATE(processed_date)) as active_days
-            FROM template_stats
-            GROUP BY COALESCE(username, 'Unknown')
-            ORDER BY total_processed DESC
-        """)
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    COALESCE(username, 'Unknown') as username,
+                    COUNT(*) as total_processed,
+                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
+                    SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed,
+                    SUM(items_extracted) as total_items,
+                    ROUND(AVG(confidence_score), 2) as avg_confidence,
+                    ROUND(AVG(processing_time_ms), 0) as avg_time_ms,
+                    MAX(processed_date) as last_activity,
+                    COUNT(DISTINCT template_name) as templates_used,
+                    COUNT(DISTINCT DATE(processed_date)) as active_days
+                FROM template_stats
+                GROUP BY COALESCE(username, 'Unknown')
+                ORDER BY total_processed DESC
+            """)
+            results = [dict(row) for row in cursor.fetchall()]
+            return results
+        finally:
+            conn.close()
 
     def get_user_activity_history(self, username: str = None, days: int = 30) -> List[Dict]:
         """Get daily activity history, optionally filtered by user."""
         self.ensure_template_stats_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        if username:
-            cursor.execute("""
-                SELECT
-                    DATE(processed_date) as date,
-                    COUNT(*) as pdfs_processed,
-                    SUM(items_extracted) as items_extracted,
-                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
-                    SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed
-                FROM template_stats
-                WHERE username = ? AND processed_date >= date('now', ?)
-                GROUP BY DATE(processed_date)
-                ORDER BY date DESC
-            """, (username, f'-{days} days'))
-        else:
-            cursor.execute("""
-                SELECT
-                    DATE(processed_date) as date,
-                    COUNT(*) as pdfs_processed,
-                    SUM(items_extracted) as items_extracted,
-                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
-                    SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed,
-                    COUNT(DISTINCT username) as active_users
-                FROM template_stats
-                WHERE processed_date >= date('now', ?)
-                GROUP BY DATE(processed_date)
-                ORDER BY date DESC
-            """, (f'-{days} days',))
+            if username:
+                cursor.execute("""
+                    SELECT
+                        DATE(processed_date) as date,
+                        COUNT(*) as pdfs_processed,
+                        SUM(items_extracted) as items_extracted,
+                        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
+                        SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed
+                    FROM template_stats
+                    WHERE username = ? AND processed_date >= date('now', ?)
+                    GROUP BY DATE(processed_date)
+                    ORDER BY date DESC
+                """, (username, f'-{days} days'))
+            else:
+                cursor.execute("""
+                    SELECT
+                        DATE(processed_date) as date,
+                        COUNT(*) as pdfs_processed,
+                        SUM(items_extracted) as items_extracted,
+                        SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful,
+                        SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failed,
+                        COUNT(DISTINCT username) as active_users
+                    FROM template_stats
+                    WHERE processed_date >= date('now', ?)
+                    GROUP BY DATE(processed_date)
+                    ORDER BY date DESC
+                """, (f'-{days} days',))
 
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
+            results = [dict(row) for row in cursor.fetchall()]
+            return results
+        finally:
+            conn.close()
 
     def get_all_time_totals(self) -> Dict:
         """Get all-time totals for the admin dashboard."""
         self.ensure_template_stats_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT
-                COUNT(*) as total_pdfs,
-                SUM(items_extracted) as total_items,
-                COUNT(DISTINCT username) as total_users,
-                COUNT(DISTINCT template_name) as total_templates,
-                ROUND(100.0 * SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as success_rate,
-                MIN(processed_date) as first_activity,
-                MAX(processed_date) as last_activity
-            FROM template_stats
-        """)
-        result = dict(cursor.fetchone())
-        conn.close()
-        return result
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_pdfs,
+                    SUM(items_extracted) as total_items,
+                    COUNT(DISTINCT username) as total_users,
+                    COUNT(DISTINCT template_name) as total_templates,
+                    ROUND(100.0 * SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as success_rate,
+                    MIN(processed_date) as first_activity,
+                    MAX(processed_date) as last_activity
+                FROM template_stats
+            """)
+            result = dict(cursor.fetchone())
+            return result
+        finally:
+            conn.close()
 
     def ensure_corrections_table(self):
         """Create the extraction_corrections table if it doesn't exist."""
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS extraction_corrections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                template_name TEXT NOT NULL,
-                pdf_file TEXT,
-                field_name TEXT NOT NULL,
-                original_value TEXT,
-                corrected_value TEXT,
-                part_number TEXT,
-                correction_date TEXT NOT NULL
-            )
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_corrections_template ON extraction_corrections(template_name)
-        """)
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_corrections_field ON extraction_corrections(field_name)
-        """)
-        conn.commit()
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS extraction_corrections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    template_name TEXT NOT NULL,
+                    pdf_file TEXT,
+                    field_name TEXT NOT NULL,
+                    original_value TEXT,
+                    corrected_value TEXT,
+                    part_number TEXT,
+                    correction_date TEXT NOT NULL
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_corrections_template ON extraction_corrections(template_name)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_corrections_field ON extraction_corrections(field_name)
+            """)
+            conn.commit()
+        finally:
+            conn.close()
 
     def record_correction(self, template_name: str, pdf_file: str = None,
                           field_name: str = None, original_value: str = None,
@@ -707,89 +729,95 @@ class OCRMillDatabase:
         self.ensure_corrections_table()
         with self._lock:
             conn = self._get_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO extraction_corrections (
-                    template_name, pdf_file, field_name, original_value,
-                    corrected_value, part_number, correction_date
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (
-                template_name,
-                pdf_file,
-                field_name,
-                original_value,
-                corrected_value,
-                part_number,
-                datetime.now().isoformat()
-            ))
-            conn.commit()
-            conn.close()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    INSERT INTO extraction_corrections (
+                        template_name, pdf_file, field_name, original_value,
+                        corrected_value, part_number, correction_date
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    template_name,
+                    pdf_file,
+                    field_name,
+                    original_value,
+                    corrected_value,
+                    part_number,
+                    datetime.now().isoformat()
+                ))
+                conn.commit()
+            finally:
+                conn.close()
 
     def get_common_corrections(self, template_name: str = None, limit: int = 50) -> List[Dict]:
         """Get common corrections for a template to identify improvement patterns."""
         self.ensure_corrections_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        if template_name:
-            cursor.execute("""
-                SELECT field_name, original_value, corrected_value, COUNT(*) as frequency
-                FROM extraction_corrections
-                WHERE template_name = ?
-                GROUP BY field_name, original_value, corrected_value
-                ORDER BY frequency DESC
-                LIMIT ?
-            """, (template_name, limit))
-        else:
-            cursor.execute("""
-                SELECT template_name, field_name, original_value, corrected_value, COUNT(*) as frequency
-                FROM extraction_corrections
-                GROUP BY template_name, field_name, original_value, corrected_value
-                ORDER BY frequency DESC
-                LIMIT ?
-            """, (limit,))
+            if template_name:
+                cursor.execute("""
+                    SELECT field_name, original_value, corrected_value, COUNT(*) as frequency
+                    FROM extraction_corrections
+                    WHERE template_name = ?
+                    GROUP BY field_name, original_value, corrected_value
+                    ORDER BY frequency DESC
+                    LIMIT ?
+                """, (template_name, limit))
+            else:
+                cursor.execute("""
+                    SELECT template_name, field_name, original_value, corrected_value, COUNT(*) as frequency
+                    FROM extraction_corrections
+                    GROUP BY template_name, field_name, original_value, corrected_value
+                    ORDER BY frequency DESC
+                    LIMIT ?
+                """, (limit,))
 
-        results = [dict(row) for row in cursor.fetchall()]
-        conn.close()
-        return results
+            results = [dict(row) for row in cursor.fetchall()]
+            return results
+        finally:
+            conn.close()
 
     def get_correction_stats(self) -> Dict:
         """Get statistics about corrections."""
         self.ensure_corrections_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT
-                COUNT(*) as total_corrections,
-                COUNT(DISTINCT template_name) as templates_with_corrections,
-                COUNT(DISTINCT field_name) as fields_corrected
-            FROM extraction_corrections
-        """)
-        stats = dict(cursor.fetchone())
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total_corrections,
+                    COUNT(DISTINCT template_name) as templates_with_corrections,
+                    COUNT(DISTINCT field_name) as fields_corrected
+                FROM extraction_corrections
+            """)
+            stats = dict(cursor.fetchone())
 
-        # Most corrected templates
-        cursor.execute("""
-            SELECT template_name, COUNT(*) as correction_count
-            FROM extraction_corrections
-            GROUP BY template_name
-            ORDER BY correction_count DESC
-            LIMIT 5
-        """)
-        stats['top_templates'] = [dict(row) for row in cursor.fetchall()]
+            # Most corrected templates
+            cursor.execute("""
+                SELECT template_name, COUNT(*) as correction_count
+                FROM extraction_corrections
+                GROUP BY template_name
+                ORDER BY correction_count DESC
+                LIMIT 5
+            """)
+            stats['top_templates'] = [dict(row) for row in cursor.fetchall()]
 
-        # Most corrected fields
-        cursor.execute("""
-            SELECT field_name, COUNT(*) as correction_count
-            FROM extraction_corrections
-            GROUP BY field_name
-            ORDER BY correction_count DESC
-            LIMIT 5
-        """)
-        stats['top_fields'] = [dict(row) for row in cursor.fetchall()]
+            # Most corrected fields
+            cursor.execute("""
+                SELECT field_name, COUNT(*) as correction_count
+                FROM extraction_corrections
+                GROUP BY field_name
+                ORDER BY correction_count DESC
+                LIMIT 5
+            """)
+            stats['top_fields'] = [dict(row) for row in cursor.fetchall()]
 
-        conn.close()
-        return stats
+            return stats
+        finally:
+            conn.close()
 
     def suggest_correction(self, template_name: str, field_name: str, value: str) -> Optional[str]:
         """
@@ -805,20 +833,22 @@ class OCRMillDatabase:
         """
         self.ensure_corrections_table()
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
 
-        # Look for exact match corrections
-        cursor.execute("""
-            SELECT corrected_value, COUNT(*) as frequency
-            FROM extraction_corrections
-            WHERE template_name = ? AND field_name = ? AND original_value = ?
-            GROUP BY corrected_value
-            ORDER BY frequency DESC
-            LIMIT 1
-        """, (template_name, field_name, value))
+            # Look for exact match corrections
+            cursor.execute("""
+                SELECT corrected_value, COUNT(*) as frequency
+                FROM extraction_corrections
+                WHERE template_name = ? AND field_name = ? AND original_value = ?
+                GROUP BY corrected_value
+                ORDER BY frequency DESC
+                LIMIT 1
+            """, (template_name, field_name, value))
 
-        result = cursor.fetchone()
-        conn.close()
+            result = cursor.fetchone()
+        finally:
+            conn.close()
 
         if result and result['frequency'] >= 2:  # At least 2 occurrences
             return result['corrected_value']

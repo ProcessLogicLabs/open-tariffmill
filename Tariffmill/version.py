@@ -86,7 +86,7 @@ def get_version_info():
             'branch': branch,
             'is_release': True
         }
-    except:
+    except Exception:
         return {
             'version': __fallback_version__,
             'tag': __fallback_version__,

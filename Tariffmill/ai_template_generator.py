@@ -764,17 +764,19 @@ class AITemplateGeneratorDialog(QDialog):
             from pathlib import Path
             db_path = Path(__file__).parent / "tariffmill.db"
             conn = sqlite3.connect(str(db_path))
-            c = conn.cursor()
-            # Ensure app_config table exists
-            c.execute("""CREATE TABLE IF NOT EXISTS app_config (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )""")
-            c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
-                     (f'api_key_{provider}', api_key))
-            conn.commit()
-            conn.close()
-            logger.info(f"Saved API key for {provider} to database")
+            try:
+                c = conn.cursor()
+                # Ensure app_config table exists
+                c.execute("""CREATE TABLE IF NOT EXISTS app_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )""")
+                c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)",
+                         (f'api_key_{provider}', api_key))
+                conn.commit()
+                logger.info(f"Saved API key for {provider} to database")
+            finally:
+                conn.close()
         except Exception as e:
             logger.warning(f"Failed to save API key: {e}")
 
@@ -1341,11 +1343,13 @@ class AITemplateGeneratorDialog(QDialog):
             import sqlite3
             db_path = BASE_DIR / "Resources" / "tariffmill.db"
             conn = sqlite3.connect(str(db_path))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = ?", (f'ai_{key}',))
-            row = c.fetchone()
-            conn.close()
-            return row[0] if row else ""
+            try:
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key = ?", (f'ai_{key}',))
+                row = c.fetchone()
+                return row[0] if row else ""
+            finally:
+                conn.close()
         except Exception:
             return ""
 
@@ -1955,13 +1959,15 @@ class AITemplateChatDialog(QDialog):
             import sqlite3
             db_path = Path(__file__).parent / "tariffmill.db"
             conn = sqlite3.connect(str(db_path))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
-            row = c.fetchone()
-            conn.close()
-            if row and row[0]:
-                return row[0]
-        except:
+            try:
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
+                row = c.fetchone()
+                if row and row[0]:
+                    return row[0]
+            finally:
+                conn.close()
+        except Exception:
             pass
 
         # Fall back to environment
@@ -2535,13 +2541,15 @@ class AITemplateEditorDialog(QDialog):
             import sqlite3
             db_path = Path(__file__).parent / "tariffmill.db"
             conn = sqlite3.connect(str(db_path))
-            c = conn.cursor()
-            c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
-            row = c.fetchone()
-            conn.close()
-            if row and row[0]:
-                return row[0]
-        except:
+            try:
+                c = conn.cursor()
+                c.execute("SELECT value FROM app_config WHERE key = ?", (f'api_key_{key_name}',))
+                row = c.fetchone()
+                if row and row[0]:
+                    return row[0]
+            finally:
+                conn.close()
+        except Exception:
             pass
 
         if provider == "OpenAI":
