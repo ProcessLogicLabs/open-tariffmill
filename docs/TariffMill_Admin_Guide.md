@@ -45,10 +45,6 @@ This guide covers administration tasks for TariffMill including user management,
 
 The Windows installer (`TariffMill_Setup_x.xx.x.exe`) provides Start Menu/Desktop shortcuts, shared `auth_users.json`, and an uninstaller. Default path: `C:\Program Files\TariffMill\`
 
-### Portable Executable
-
-Single file, no installation required. Stores database locally alongside the executable. Ideal for USB or restricted environments.
-
 ### Multi-User (Shared Network Database)
 
 1. Install TariffMill on each workstation

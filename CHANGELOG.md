@@ -10,7 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - New Essen International invoice template
 - New RBA Exports Sigma invoice template
-- Portable ZIP version for no-install deployment
 
 ## [0.97.64] - 2026-01-22
 

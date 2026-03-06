@@ -61,7 +61,7 @@ This guide is for **end users** who process invoices, manage parts data, and use
 
 | Platform | Installation Method |
 |----------|-------------------|
-| **Windows** | Installer (.exe) or portable executable |
+| **Windows** | Installer (.exe) |
 | **Linux** | pip install from GitHub |
 | **macOS** | pip install from GitHub |
 
@@ -74,14 +74,6 @@ This guide is for **end users** who process invoices, manage parts data, and use
 1. Download `TariffMill_Setup_x.xx.x.exe` from the [Releases](https://github.com/ProcessLogicLabs/open-tariffmill/releases) page
 2. Run the installer and follow the prompts
 3. Launch TariffMill from the Start Menu or Desktop shortcut
-
-### Windows Portable
-
-1. Download `TariffMill.exe` from the Releases page
-2. Place it in your preferred folder
-3. Double-click to run — no installation required
-
-> **Note:** The portable version stores its database and settings locally alongside the executable. It is ideal for USB drives or environments where you cannot install software.
 
 ### Linux / macOS (pip)
 

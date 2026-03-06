@@ -77,10 +77,6 @@ Linux and macOS are supported via pip installation.
 
 Download `TariffMill_Setup_x.xx.x.exe` from the [Releases](https://github.com/ProcessLogicLabs/open-tariffmill/releases) page and run the installer.
 
-### Windows Portable
-
-Download `TariffMill.exe` from the [Releases](https://github.com/ProcessLogicLabs/open-tariffmill/releases) page. No installation required — just run the executable.
-
 #### Windows SmartScreen Warning
 
 On first run, Windows may show a "Windows protected your PC" warning. This is normal for newly distributed software:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tariffmill"
-version = "0.99.0"
+version = "0.99.1"
 description = "TariffMill - Customs Entry Processing and HTS Classification Tool"
 readme = "README.md"
 license = {text = "MIT"}
@@ -46,8 +46,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ProcessLogicLabs/TariffMill"
-Repository = "https://github.com/ProcessLogicLabs/TariffMill"
+Homepage = "https://github.com/ProcessLogicLabs/open-tariffmill"
+Repository = "https://github.com/ProcessLogicLabs/open-tariffmill"
 
 [project.scripts]
 tariffmill = "Tariffmill.tariffmill:main"

@@ -186,7 +186,6 @@ class UpdateChecker:
         self.release_url = None
         self.release_notes = None
         self.download_url = None
-        self.portable_download_url = None  # URL for portable .zip version
         self.error = None
     
     def parse_version(self, version_str):
@@ -249,7 +248,7 @@ class UpdateChecker:
             self.release_url = data.get('html_url', GITHUB_RELEASES_URL)
             self.release_notes = data.get('body', 'No release notes available.')
             
-            # Find Windows installer and portable download URLs from assets
+            # Find Windows installer download URL from assets
             # Prioritize Setup/Installer exe over standalone exe
             assets = data.get('assets', [])
             standalone_url = None
@@ -263,9 +262,6 @@ class UpdateChecker:
                     else:
                         # Keep standalone as fallback
                         standalone_url = url
-                elif name.endswith('.zip') and 'portable' in name:
-                    # Portable version (zip file)
-                    self.portable_download_url = url
 
             # Use standalone exe if no installer found
             if not self.download_url and standalone_url:
@@ -280,20 +276,20 @@ class UpdateChecker:
             logger.info(f"Update check: current={self.current_version}, latest={self.latest_version}, update_available={has_update}")
 
             return (has_update, self.latest_version, self.release_url,
-                    self.release_notes, self.download_url, self.portable_download_url, None)
-            
+                    self.release_notes, self.download_url, None)
+
         except urllib.error.URLError as e:
             self.error = f"Network error: {str(e)}"
             logger.warning(f"Update check failed: {self.error}")
-            return (False, None, None, None, None, None, self.error)
+            return (False, None, None, None, None, self.error)
         except json.JSONDecodeError as e:
             self.error = f"Invalid response from GitHub: {str(e)}"
             logger.warning(f"Update check failed: {self.error}")
-            return (False, None, None, None, None, None, self.error)
+            return (False, None, None, None, None, self.error)
         except Exception as e:
             self.error = f"Update check failed: {str(e)}"
             logger.warning(f"Update check failed: {self.error}")
-            return (False, None, None, None, None, None, self.error)
+            return (False, None, None, None, None, self.error)
 
 
 # ==============================================================================
@@ -328,11 +324,7 @@ class AuthenticationManager:
                 self.users = local_users
 
     def get_allowed_domains(self) -> list:
-        """Get allowed Windows domains from settings.
-
-        For portable versions, falls back to the local portable DB if the
-        primary DB (network) doesn't have the setting.
-        """
+        """Get allowed Windows domains from settings."""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -343,20 +335,6 @@ class AuthenticationManager:
                 return [d.strip() for d in row[0].split(',') if d.strip()]
         except Exception:
             pass
-        # Portable fallback: check local DB if db_path points elsewhere
-        if IS_PORTABLE:
-            local_db = str(BASE_DIR / DB_NAME)
-            if local_db != self.db_path and Path(local_db).exists():
-                try:
-                    conn = sqlite3.connect(local_db)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT value FROM app_config WHERE key = 'allowed_domains'")
-                    row = cursor.fetchone()
-                    conn.close()
-                    if row and row[0]:
-                        return [d.strip() for d in row[0].split(',') if d.strip()]
-                except Exception:
-                    pass
         return []  # No domains configured = no auto-login allowed
 
     def try_windows_auth(self) -> tuple:
@@ -570,7 +548,7 @@ class AuthenticationManager:
         temp directory) and standard development setups.
         """
         search_paths = [
-            # Application data directory (reliable for both standard and portable)
+            # Application data directory
             BASE_DIR / 'auth_users.json',
             # TariffMill_Config repo (where admin panel saves)
             Path.home() / 'TariffMill_Config' / 'auth_users.json',
@@ -968,21 +946,14 @@ del "%~f0"
 if getattr(sys, 'frozen', False):
     # Running as compiled executable (PyInstaller)
     INSTALL_DIR = Path(sys.executable).parent
-    # Detect portable version by checking executable name
-    IS_PORTABLE = 'Portable' in Path(sys.executable).name
     if hasattr(sys, '_MEIPASS'):
         # PyInstaller stores data files in _MEIPASS (_internal folder)
         RESOURCES_DIR = Path(sys._MEIPASS) / "Resources"
     else:
         RESOURCES_DIR = INSTALL_DIR / "Resources"
-    # Portable version stores data in app directory; standard version uses AppData
-    if IS_PORTABLE:
-        BASE_DIR = INSTALL_DIR
-    else:
-        BASE_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home())) / "TariffMill"
+    BASE_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home())) / "TariffMill"
 else:
     # Running as Python script
-    IS_PORTABLE = False
     INSTALL_DIR = Path(__file__).parent
     BASE_DIR = INSTALL_DIR
     RESOURCES_DIR = BASE_DIR / "Resources"
@@ -2641,19 +2612,6 @@ def init_database():
 
 init_database()
 
-# Portable: ensure app_config table exists in local DB even when
-# DB_PATH points to a network database, so domain settings persist on device
-if IS_PORTABLE:
-    _local_portable_db = BASE_DIR / DB_NAME
-    if _local_portable_db != DB_PATH:
-        try:
-            _conn = sqlite3.connect(str(_local_portable_db))
-            _conn.execute("CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)")
-            _conn.commit()
-            _conn.close()
-        except Exception as _e:
-            logger.warning(f"Failed to init portable app_config table: {_e}")
-
 # ----------------------------------------------------------------------
 # Drag & Drop Components
 # ----------------------------------------------------------------------
@@ -3461,7 +3419,7 @@ class FirstRunSetupDialog(QDialog):
                 "users": users
             }
 
-            # Save to BASE_DIR (primary location for installed/portable)
+            # Save to BASE_DIR
             base_auth_path = BASE_DIR / 'auth_users.json'
             with open(base_auth_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=4)
@@ -3760,13 +3718,9 @@ class TariffMill(QMainWindow):
         self._processed_events = set()
         
         # Set window icon (use TEMP_RESOURCES_DIR for bundled resources)
-        # Portable version uses gold icon, standard version uses white icon
-        if IS_PORTABLE:
-            icon_path = TEMP_RESOURCES_DIR / "icon_portable.ico"
-        else:
-            icon_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
-            if not icon_path.exists():
-                icon_path = TEMP_RESOURCES_DIR / "icon.ico"
+        icon_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
+        if not icon_path.exists():
+            icon_path = TEMP_RESOURCES_DIR / "icon.ico"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         
@@ -8341,7 +8295,7 @@ class TariffMill(QMainWindow):
         QApplication.processEvents()
         
         checker = UpdateChecker(VERSION)
-        has_update, latest, url, notes, download_url, portable_url, error = checker.check_for_updates()
+        has_update, latest, url, notes, download_url, error = checker.check_for_updates()
 
         if error:
             QMessageBox.warning(self, "Update Check Failed",
@@ -8351,7 +8305,7 @@ class TariffMill(QMainWindow):
             return
 
         if has_update:
-            self.show_update_available_dialog(latest, url, notes, download_url, portable_url)
+            self.show_update_available_dialog(latest, url, notes, download_url)
         else:
             QMessageBox.information(self, "No Updates Available",
                 f"You are running the latest version.\n\n"
@@ -8360,8 +8314,8 @@ class TariffMill(QMainWindow):
         
         self.bottom_status.setText("Ready")
 
-    def show_update_available_dialog(self, latest_version, release_url, release_notes, download_url, portable_url=None):
-        """Show dialog when an update is available - OS-aware and portable-aware"""
+    def show_update_available_dialog(self, latest_version, release_url, release_notes, download_url):
+        """Show dialog when an update is available - OS-aware"""
         import sys
 
         dialog = QDialog(self)
@@ -8392,28 +8346,15 @@ class TariffMill(QMainWindow):
         notes_group.setLayout(notes_layout)
         layout.addWidget(notes_group)
 
-        # Buttons - OS-aware and portable-aware
+        # Buttons - OS-aware
         btn_layout = QHBoxLayout()
 
         if sys.platform == 'win32':
-            if IS_PORTABLE:
-                # Portable version: Download to USB drive location only
-                if portable_url:
-                    download_btn = QPushButton("Download to USB")
-                    download_btn.setStyleSheet(self.get_button_style("success"))
-                    download_btn.clicked.connect(lambda: self._download_portable_update(portable_url, latest_version, dialog))
-                    btn_layout.addWidget(download_btn)
-                else:
-                    # Fallback if no portable URL available
-                    info_label = QLabel("(Download from GitHub)")
-                    btn_layout.addWidget(info_label)
-            else:
-                # Installed version: Show download & install button
-                if download_url:
-                    download_btn = QPushButton("Download && Install")
-                    download_btn.setStyleSheet(self.get_button_style("success"))
-                    download_btn.clicked.connect(lambda: self._download_and_install_update(download_url, dialog))
-                    btn_layout.addWidget(download_btn)
+            if download_url:
+                download_btn = QPushButton("Download && Install")
+                download_btn.setStyleSheet(self.get_button_style("success"))
+                download_btn.clicked.connect(lambda: self._download_and_install_update(download_url, dialog))
+                btn_layout.addWidget(download_btn)
         else:
             # Linux/macOS: Show update button that runs git pull + pip install
             update_btn = QPushButton("Update Now")
@@ -8548,7 +8489,7 @@ class TariffMill(QMainWindow):
         def check_thread():
             try:
                 checker = UpdateChecker(VERSION)
-                has_update, latest, url, notes, download_url, portable_url, error = checker.check_for_updates()
+                has_update, latest, url, notes, download_url, error = checker.check_for_updates()
                 logger.info(f"Startup update check result: has_update={has_update}, latest={latest}, error={error}")
                 if has_update and not error:
                     logger.info(f"Update available! Scheduling dialog for version {latest}")
@@ -8558,7 +8499,6 @@ class TariffMill(QMainWindow):
                         'url': url,
                         'notes': notes,
                         'download_url': download_url,
-                        'portable_url': portable_url
                     }
                     # Use QMetaObject.invokeMethod for thread-safe main thread call
                     from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
@@ -8587,7 +8527,6 @@ class TariffMill(QMainWindow):
                     update_info['url'],
                     update_info['notes'],
                     update_info['download_url'],
-                    update_info.get('portable_url')
                 )
         except Exception as e:
             logger.error(f"Error showing update dialog: {e}")
@@ -8818,106 +8757,6 @@ class TariffMill(QMainWindow):
                 f"Please download manually from GitHub."
             )
             logger.error(f"Update download failed: {e}")
-
-    def _download_portable_update(self, download_url: str, version: str, dialog: QDialog):
-        """Download the portable update to the USB drive (same location as current exe)."""
-        import urllib.request
-
-        dialog.accept()
-
-        # Get the directory where the current exe is located (USB drive)
-        exe_dir = Path(sys.executable).parent
-
-        # Create progress dialog
-        progress_dialog = QDialog(self)
-        progress_dialog.setWindowTitle("Downloading Update")
-        progress_dialog.setFixedSize(400, 120)
-        progress_layout = QVBoxLayout(progress_dialog)
-
-        progress_label = QLabel("Downloading portable update...")
-        progress_layout.addWidget(progress_label)
-
-        progress_bar = QProgressBar()
-        progress_bar.setRange(0, 100)
-        progress_layout.addWidget(progress_bar)
-
-        cancel_btn = QPushButton("Cancel")
-        progress_layout.addWidget(cancel_btn)
-
-        cancelled = [False]
-        cancel_btn.clicked.connect(lambda: cancelled.__setitem__(0, True))
-        cancel_btn.clicked.connect(progress_dialog.reject)
-
-        progress_dialog.show()
-        QApplication.processEvents()
-
-        try:
-            # Extract filename from URL
-            filename = download_url.split('/')[-1]
-            if not filename.endswith('.zip'):
-                filename = f'TariffMill_Portable_{version}.zip'
-
-            # Download to USB drive directory
-            download_path = exe_dir / filename
-
-            # Download with progress
-            request = urllib.request.Request(
-                download_url,
-                headers={'User-Agent': f'TariffMill/{VERSION}'}
-            )
-
-            with urllib.request.urlopen(request, timeout=60) as response:
-                total_size = int(response.headers.get('content-length', 0))
-                downloaded = 0
-                block_size = 8192
-
-                with open(download_path, 'wb') as f:
-                    while True:
-                        if cancelled[0]:
-                            progress_dialog.close()
-                            # Clean up partial download
-                            if download_path.exists():
-                                download_path.unlink()
-                            return
-
-                        chunk = response.read(block_size)
-                        if not chunk:
-                            break
-
-                        f.write(chunk)
-                        downloaded += len(chunk)
-
-                        if total_size > 0:
-                            percent = int(downloaded * 100 / total_size)
-                            progress_bar.setValue(percent)
-                            progress_label.setText(f"Downloading... {downloaded // 1024 // 1024} MB / {total_size // 1024 // 1024} MB")
-
-                        QApplication.processEvents()
-
-            progress_dialog.close()
-
-            # Show success message
-            QMessageBox.information(
-                self, "Download Complete",
-                f"The portable update has been downloaded to:\n\n"
-                f"{download_path}\n\n"
-                f"To update:\n"
-                f"1. Close TariffMill\n"
-                f"2. Extract the ZIP file\n"
-                f"3. Replace the old .exe with the new one\n"
-                f"4. Restart TariffMill"
-            )
-
-            logger.info(f"Portable update downloaded to: {download_path}")
-
-        except Exception as e:
-            progress_dialog.close()
-            QMessageBox.critical(
-                self, "Download Failed",
-                f"Failed to download update:\n\n{str(e)}\n\n"
-                f"Please download manually from GitHub."
-            )
-            logger.error(f"Portable update download failed: {e}")
 
     def show_about_dialog(self):
         """Show the About dialog"""
@@ -13604,11 +13443,7 @@ class TariffMill(QMainWindow):
         return True, ""
 
     def get_app_setting(self, key: str, default: str = ""):
-        """Get an application setting value from app_config table.
-
-        For portable versions, falls back to the local portable DB if the
-        primary DB (which may be a network path) doesn't have the setting.
-        """
+        """Get an application setting value from app_config table."""
         try:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
@@ -13619,28 +13454,10 @@ class TariffMill(QMainWindow):
                 return row[0]
         except:
             pass
-        # Portable fallback: check local DB if DB_PATH points elsewhere
-        if IS_PORTABLE:
-            local_db = BASE_DIR / DB_NAME
-            if local_db != DB_PATH and local_db.exists():
-                try:
-                    conn = sqlite3.connect(str(local_db))
-                    c = conn.cursor()
-                    c.execute("SELECT value FROM app_config WHERE key = ?", (key,))
-                    row = c.fetchone()
-                    conn.close()
-                    if row and row[0]:
-                        return row[0]
-                except:
-                    pass
         return default
 
     def set_app_setting(self, key: str, value: str):
-        """Set an application setting value in app_config table.
-
-        For portable versions, also saves to the local portable DB so
-        settings persist when the device is used away from the network.
-        """
+        """Set an application setting value in app_config table."""
         try:
             conn = sqlite3.connect(str(DB_PATH))
             c = conn.cursor()
@@ -13650,19 +13467,6 @@ class TariffMill(QMainWindow):
         except Exception as e:
             logger.warning(f"Failed to set app setting: {e}")
             return False
-        # Portable: also save to local DB so settings travel with the device
-        if IS_PORTABLE:
-            local_db = BASE_DIR / DB_NAME
-            if local_db != DB_PATH:
-                try:
-                    conn = sqlite3.connect(str(local_db))
-                    c = conn.cursor()
-                    c.execute("CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)")
-                    c.execute("INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)", (key, value))
-                    conn.commit()
-                    conn.close()
-                except Exception as e:
-                    logger.warning(f"Failed to save app setting to portable DB: {e}")
         return True
 
     def _update_account_menu(self):
@@ -14682,7 +14486,7 @@ class TariffMill(QMainWindow):
                 "users": users
             }
 
-            # Save to BASE_DIR (persistent across restarts for both standard and portable)
+            # Save to BASE_DIR (persistent across restarts)
             base_auth_path = BASE_DIR / 'auth_users.json'
             logger.info(f"Saving {len(users)} users to: {base_auth_path}")
             with open(base_auth_path, 'w', encoding='utf-8') as f:
@@ -26617,13 +26421,9 @@ def main():
 
     try:
         # Theme will be set by apply_saved_theme() during initialization
-        # Portable version uses gold icon, standard version uses white icon
-        if IS_PORTABLE:
-            icon_path = TEMP_RESOURCES_DIR / "icon_portable.ico"
-        else:
-            icon_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
-            if not icon_path.exists():
-                icon_path = TEMP_RESOURCES_DIR / "icon.ico"
+        icon_path = TEMP_RESOURCES_DIR / "tariffmill_icon_hybrid_2.svg"
+        if not icon_path.exists():
+            icon_path = TEMP_RESOURCES_DIR / "icon.ico"
         if icon_path.exists():
             app.setWindowIcon(QIcon(str(icon_path)))
 
