@@ -15976,6 +15976,15 @@ class TariffMill(QMainWindow):
         self.ocrmill_config.consolidate_multi_invoice = pdf_settings.consolidate_multi_invoice
         self.ocrmill_config.auto_start = pdf_settings.auto_start_monitoring
 
+        # Set shared templates folder BEFORE creating processor so _discover_templates() finds them
+        try:
+            from templates import set_shared_templates_folder
+            shared_folder = self.get_app_setting('shared_templates_folder', '')
+            if shared_folder:
+                set_shared_templates_folder(shared_folder)
+        except Exception:
+            pass
+
         self.ocrmill_processor = ProcessorEngine(self.ocrmill_db, self.ocrmill_config, log_callback=self.ocrmill_log)
         # Set current user for statistics tracking
         if self.auth_manager and self.auth_manager.current_user:
